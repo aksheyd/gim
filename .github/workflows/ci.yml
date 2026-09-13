@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --all-features
+      - name: No stray names
+        # The pattern is assembled from pieces so this file never matches itself.
+        run: |
+          pattern="$(printf '%s|%s|%s|%s|%s|%s' 'gr''ok' 'x''ai' 'x\.''ai' 'comp''oser' 'text''area' 'mono''repo')"
+          ! grep -rniE "$pattern" --exclude-dir=target --exclude-dir=.git .

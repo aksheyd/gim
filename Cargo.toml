@@ -1,0 +1,25 @@
+[package]
+name = "gim"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Akshey Deokule <aksheydeokule@gmail.com>"]
+description = "A small terminal notes editor with no modes"
+license = "MIT"
+repository = "https://github.com/aksheyd/gim"
+readme = "README.md"
+publish = false
+
+[features]
+default = ["clipboard"]
+clipboard = ["dep:arboard"]
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1.13"
+arboard = { version = "3.6", default-features = false, optional = true }
+
+[profile.release]
+strip = true

@@ -1,0 +1,371 @@
+//! Application state above the editor: the document, the quit prompt, the
+//! status message and the clipboard. Pure: takes events, returns `Flow`.
+
+use std::time::{Duration, Instant};
+
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::layout::Rect;
+
+use crate::clipboard::Clipboard;
+use crate::editor::{Editor, Effect};
+use crate::file::{self, Document};
+use crate::keys::{Action, classify};
+use crate::text::normalize_newlines;
+use crate::ui::text_area;
+
+pub const QUIT_PROMPT: &str = "Unsaved changes — y: save & quit  n: discard  Esc: cancel";
+pub const HINT: &str = "Ctrl-S save · Ctrl-Q quit";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flow {
+    Continue,
+    Quit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Normal,
+    QuitPrompt,
+}
+
+pub struct App {
+    pub editor: Editor,
+    pub doc: Document,
+    mode: Mode,
+    message: Option<String>,
+    clipboard: Box<dyn Clipboard>,
+    size: (u16, u16),
+}
+
+impl App {
+    pub fn new(
+        doc: Document,
+        text: String,
+        clipboard: Box<dyn Clipboard>,
+        width: u16,
+        height: u16,
+    ) -> Self {
+        let area = text_area(Rect::new(0, 0, width, height));
+        App {
+            editor: Editor::new(text, usize::from(area.width), usize::from(area.height)),
+            doc,
+            mode: Mode::Normal,
+            message: None,
+            clipboard,
+            size: (width, height),
+        }
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.doc.is_dirty(self.editor.text())
+    }
+
+    /// Screen rectangle of the text view for the current size.
+    pub fn text_rect(&self) -> Rect {
+        text_area(Rect::new(0, 0, self.size.0, self.size.1))
+    }
+
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.size = (width, height);
+        let area = self.text_rect();
+        let (width, height) = (usize::from(area.width), usize::from(area.height));
+        self.editor.set_viewport(width, height);
+    }
+
+    pub fn next_deadline(&self) -> Option<Duration> {
+        self.editor.next_deadline()
+    }
+
+    /// Drives drag auto-scroll; true when something changed.
+    pub fn advance(&mut self, now: Instant) -> bool {
+        let effect = self.editor.advance(now);
+        let changed = effect != Effect::Nothing;
+        self.apply_effect(effect);
+        changed
+    }
+
+    pub fn handle_event(&mut self, event: Event, now: Instant) -> Flow {
+        match event {
+            Event::Key(key) => {
+                if key.kind == KeyEventKind::Release {
+                    return Flow::Continue;
+                }
+                self.message = None;
+                self.editor.clear_pin();
+                if self.mode == Mode::QuitPrompt {
+                    return self.prompt_key(key);
+                }
+                match classify(key) {
+                    Some(action) => self.action(action),
+                    None => Flow::Continue,
+                }
+            }
+            Event::Paste(text) => {
+                if self.mode == Mode::Normal {
+                    let text = normalize_newlines(&text);
+                    let effect = self.editor.insert_text(&text);
+                    self.apply_effect(effect);
+                }
+                Flow::Continue
+            }
+            Event::Mouse(mouse) => {
+                if self.mode == Mode::Normal {
+                    let area = self.text_rect();
+                    let effect = self.editor.mouse(mouse, area, now);
+                    self.apply_effect(effect);
+                }
+                Flow::Continue
+            }
+            Event::Resize(width, height) => {
+                self.resize(width, height);
+                Flow::Continue
+            }
+            Event::FocusGained | Event::FocusLost => Flow::Continue,
+        }
+    }
+
+    fn prompt_key(&mut self, key: KeyEvent) -> Flow {
+        let chords = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER;
+        let chord = key.modifiers.intersects(chords);
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('y' | 'Y') if !chord => match self.save() {
+                Ok(_) => Flow::Quit,
+                Err(message) => {
+                    self.mode = Mode::Normal;
+                    self.message = Some(message);
+                    Flow::Continue
+                }
+            },
+            KeyCode::Char('n' | 'N') if !chord => Flow::Quit,
+            KeyCode::Esc => self.cancel_prompt(),
+            KeyCode::Char('q' | 'c') if ctrl => self.cancel_prompt(),
+            _ => Flow::Continue,
+        }
+    }
+
+    fn cancel_prompt(&mut self) -> Flow {
+        self.mode = Mode::Normal;
+        Flow::Continue
+    }
+
+    fn action(&mut self, action: Action) -> Flow {
+        match action {
+            Action::Save => {
+                let message = match self.save() {
+                    Ok(m) | Err(m) => m,
+                };
+                self.message = Some(message);
+            }
+            Action::Quit => {
+                if self.is_dirty() {
+                    // The prompt swallows the mouse-up, so forget any drag now.
+                    self.editor.end_drag();
+                    self.mode = Mode::QuitPrompt;
+                } else {
+                    return Flow::Quit;
+                }
+            }
+            Action::Paste => {
+                if let Some(text) = self.clipboard.get() {
+                    let text = normalize_newlines(&text);
+                    let effect = self.editor.insert_text(&text);
+                    self.apply_effect(effect);
+                }
+            }
+            Action::Copy if self.editor.selection().is_none() => {
+                self.message = Some(HINT.to_string());
+            }
+            other => {
+                let effect = self.editor.handle(other);
+                self.apply_effect(effect);
+            }
+        }
+        Flow::Continue
+    }
+
+    fn apply_effect(&mut self, effect: Effect) {
+        if let Effect::Copy(text) = effect {
+            self.clipboard.set(&text);
+        }
+    }
+
+    /// Saves unless nothing changed; returns the status message either way.
+    fn save(&mut self) -> Result<String, String> {
+        if self.doc.exists && !self.is_dirty() {
+            return Ok("no changes".to_string());
+        }
+        let outcome = match file::save(&mut self.doc, self.editor.text()) {
+            Ok(outcome) => outcome,
+            Err(e) => return Err(e.to_string()),
+        };
+        if outcome.atomic {
+            Ok(format!("Saved {}", plural(outcome.bytes, "byte")))
+        } else {
+            Ok("saved (non-atomic)".to_string())
+        }
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 {
+        format!("{n} {word}")
+    } else {
+        format!("{n} {word}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use crate::clipboard::MemClipboard;
+    use crate::file::temp_dir;
+
+    fn make_app(text: &str) -> App {
+        let doc = Document::new(&temp_dir().join("notes.md"));
+        let clipboard = Box::new(MemClipboard::default());
+        App::new(doc, text.to_string(), clipboard, 40, 10)
+    }
+
+    fn key(app: &mut App, code: KeyCode, mods: KeyModifiers) -> Flow {
+        app.handle_event(Event::Key(KeyEvent::new(code, mods)), Instant::now())
+    }
+
+    fn ctrl(app: &mut App, c: char) -> Flow {
+        key(app, KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    fn plain(app: &mut App, c: char) -> Flow {
+        key(app, KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn cleanup(app: &App) {
+        if let Some(dir) = app.doc.path.parent() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn quit_prompt_state_machine() {
+        let mut app = make_app("");
+        assert_eq!(ctrl(&mut app, 'q'), Flow::Quit);
+        plain(&mut app, 'x');
+        assert_eq!(ctrl(&mut app, 'q'), Flow::Continue);
+        assert_eq!(app.mode(), Mode::QuitPrompt);
+        assert_eq!(plain(&mut app, 'z'), Flow::Continue);
+        assert_eq!(app.mode(), Mode::QuitPrompt);
+        assert_eq!(app.editor.text(), "x");
+        let paste = Event::Paste("ignored".to_string());
+        assert_eq!(app.handle_event(paste, Instant::now()), Flow::Continue);
+        assert_eq!(app.editor.text(), "x");
+        let flow = key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(flow, Flow::Continue);
+        assert_eq!(app.mode(), Mode::Normal);
+        ctrl(&mut app, 'q');
+        assert_eq!(ctrl(&mut app, 'q'), Flow::Continue);
+        assert_eq!(app.mode(), Mode::Normal);
+        ctrl(&mut app, 'q');
+        assert_eq!(ctrl(&mut app, 'c'), Flow::Continue);
+        assert_eq!(app.mode(), Mode::Normal);
+        ctrl(&mut app, 'q');
+        assert_eq!(plain(&mut app, 'n'), Flow::Quit);
+        assert!(!app.doc.path.exists());
+        cleanup(&app);
+    }
+
+    #[test]
+    fn prompt_y_saves_and_quits_or_reports_failure() {
+        let mut app = make_app("");
+        plain(&mut app, 'x');
+        ctrl(&mut app, 'q');
+        assert_eq!(plain(&mut app, 'y'), Flow::Quit);
+        assert_eq!(fs::read_to_string(&app.doc.path).unwrap(), "x");
+        cleanup(&app);
+
+        let mut app = make_app("");
+        let file = app.doc.path.parent().unwrap().join("blocker");
+        fs::write(&file, "").unwrap();
+        app.doc.path = file.join("child.md");
+        plain(&mut app, 'x');
+        ctrl(&mut app, 'q');
+        assert_eq!(plain(&mut app, 'y'), Flow::Continue);
+        assert_eq!(app.mode(), Mode::Normal);
+        assert!(app.message().is_some());
+        assert!(app.is_dirty());
+        cleanup(&app);
+    }
+
+    #[test]
+    fn save_messages_and_dirty_across_undo() {
+        let mut app = make_app("");
+        assert!(!app.is_dirty());
+        app.editor.handle(Action::Recenter);
+        assert_eq!(app.editor.pinned_scroll(), Some(0));
+        ctrl(&mut app, 's');
+        assert_eq!(app.editor.pinned_scroll(), None);
+        assert!(app.message().unwrap().starts_with("Saved 0 bytes"));
+        assert!(app.doc.exists);
+        ctrl(&mut app, 's');
+        assert_eq!(app.message(), Some("no changes"));
+        plain(&mut app, 'a');
+        assert!(app.is_dirty());
+        assert_eq!(app.message(), None);
+        ctrl(&mut app, 'z');
+        assert!(!app.is_dirty());
+        key(&mut app, KeyCode::Char('Z'), KeyModifiers::CONTROL);
+        assert!(app.is_dirty());
+        ctrl(&mut app, 's');
+        assert_eq!(app.message(), Some("Saved 1 byte"));
+        assert!(!app.is_dirty());
+        cleanup(&app);
+    }
+
+    #[test]
+    fn ctrl_c_hints_or_copies_and_paste_normalises() {
+        let mut app = make_app("ab");
+        ctrl(&mut app, 'c');
+        assert_eq!(app.message(), Some(HINT));
+        assert_eq!(app.editor.text(), "ab");
+        key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
+        assert_eq!(app.message(), None);
+        ctrl(&mut app, 'c');
+        assert_eq!(app.message(), None);
+        assert_eq!(app.clipboard.get(), Some("a".to_string()));
+        key(&mut app, KeyCode::End, KeyModifiers::NONE);
+        ctrl(&mut app, 'v');
+        assert_eq!(app.editor.text(), "aba");
+        let paste = Event::Paste("x\r\ny\rz\u{2028}\t".to_string());
+        app.handle_event(paste, Instant::now());
+        assert_eq!(app.editor.text(), "abax\ny\nz\n\t");
+        assert_eq!(app.editor.undo_len(), 2);
+        cleanup(&app);
+    }
+
+    #[test]
+    fn resize_and_release_keys() {
+        let mut app = make_app("hello world");
+        app.handle_event(Event::Resize(5, 3), Instant::now());
+        assert_eq!(app.editor.viewport().width, 5);
+        assert_eq!(app.editor.viewport().height, 2);
+        assert_eq!(app.editor.layout().row_count(), 2);
+        app.handle_event(Event::Resize(5, 1), Instant::now());
+        assert_eq!(app.editor.viewport().height, 1);
+        app.handle_event(Event::Resize(0, 0), Instant::now());
+        assert_eq!(app.text_rect(), Rect::new(0, 0, 0, 0));
+        let kind = KeyEventKind::Release;
+        let release = KeyEvent::new_with_kind(KeyCode::Char('x'), KeyModifiers::NONE, kind);
+        app.handle_event(Event::Key(release), Instant::now());
+        assert_eq!(app.editor.text(), "hello world");
+        cleanup(&app);
+    }
+}
