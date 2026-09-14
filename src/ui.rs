@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::app::{App, Mode, QUIT_PROMPT};
+use crate::app::{App, HINT, Mode, QUIT_PROMPT};
 use crate::buffer::Pos;
 use crate::file::LineEnding;
 use crate::text::{display_width, line_start};
@@ -142,14 +142,21 @@ fn paint_status(app: &App, area: Rect, buf: &mut Buffer) {
         buf[(x, area.y)].set_symbol(" ").set_style(style);
     }
     let left = status_left(app);
-    let centre = match app.mode() {
-        Mode::QuitPrompt => QUIT_PROMPT.to_string(),
-        Mode::Normal => app.message().unwrap_or_default().to_string(),
+    let mut centre = match (app.mode(), app.message()) {
+        (Mode::QuitPrompt, Some(error)) => format!("{error} — {QUIT_PROMPT}"),
+        (Mode::QuitPrompt, None) => QUIT_PROMPT.to_string(),
+        (Mode::Normal, Some(message)) => message.to_string(),
+        (Mode::Normal, None) => HINT.to_string(),
     };
     let right = cursor_label(app.editor.text(), app.editor.cursor());
     let lw = display_width(&left);
-    let cw = display_width(&centre);
     let rw = display_width(&right);
+    // The standing hint is the first thing to go when the bar is narrow.
+    let hint_only = app.mode() == Mode::Normal && app.message().is_none();
+    if hint_only && lw + 1 + display_width(&centre) + 1 + rw > width {
+        centre.clear();
+    }
+    let cw = display_width(&centre);
     let y = area.y;
     // Truncation priority when narrow: message, then name, then Ln/Col.
     if cw > 0 {
@@ -183,7 +190,7 @@ mod tests {
 
     use super::*;
     use crate::clipboard::MemClipboard;
-    use crate::file::Document;
+    use crate::file::{Document, temp_dir};
 
     fn make_app(text: &str, width: u16, height: u16) -> App {
         let mut doc = Document::new(Path::new("notes.md"));
@@ -293,13 +300,11 @@ mod tests {
         assert!(reversed_at(&t, 0, 0));
         assert!(reversed_at(&t, 1, 0));
         assert!(!reversed_at(&t, 2, 0));
-        key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
         key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-        key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
         let t = render(&app, 60, 3);
         assert_eq!(
             row(&t, 2),
-            " notes.md (new)  Ctrl-S save · Ctrl-Q quit       Ln 1, Col 3"
+            " notes.md (new)        Ctrl-Q to quit            Ln 1, Col 3"
         );
         let mut app = make_app("x", 12, 2);
         app.doc.ending = LineEnding::Crlf;
@@ -316,14 +321,21 @@ mod tests {
         assert_eq!(row(&t, 0), "b");
         assert_eq!(cursor(&mut t), Some((0, 0)));
         let mut app = make_app("hello", 10, 1);
+        // A parent that is a regular file makes the quit-time save fail.
+        let blocker = temp_dir().join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+        app.doc.path = blocker.join("child.md");
         key(&mut app, KeyCode::Char('!'), KeyModifiers::NONE);
         let mut t = render(&app, 10, 1);
         assert_eq!(row(&t, 0), "!hello    ");
         assert_eq!(cursor(&mut t), Some((1, 0)));
         key(&mut app, KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert_eq!(app.mode(), Mode::QuitPrompt);
+        let prompt = format!("{} — {QUIT_PROMPT}", app.message().unwrap());
         let mut t = render(&app, 10, 1);
-        assert_eq!(row(&t, 0), "Unsaved ch");
+        assert_eq!(row(&t, 0), prompt.chars().take(10).collect::<String>());
         assert_eq!(cursor(&mut t), None);
+        let _ = std::fs::remove_dir_all(blocker.parent().unwrap());
         let app = make_app("", 0, 0);
         let mut t = render(&app, 0, 0);
         assert_eq!(cursor(&mut t), None);

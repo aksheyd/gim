@@ -74,7 +74,9 @@ fn run(doc: Document, text: String) -> io::Result<()> {
             terminal.draw(|frame| ui::draw(&app, frame))?;
             needs_draw = false;
         }
-        let timeout = app.next_deadline().unwrap_or(Duration::from_secs(3600));
+        let timeout = app
+            .next_deadline(Instant::now())
+            .unwrap_or(Duration::from_secs(3600));
         if !event::poll(timeout)? {
             needs_draw = app.advance(Instant::now());
             continue;

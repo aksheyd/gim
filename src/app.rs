@@ -1,5 +1,6 @@
-//! Application state above the editor: the document, the quit prompt, the
-//! status message and the clipboard. Pure: takes events, returns `Flow`.
+//! Application state above the editor: the document, autosave, the quit
+//! prompt, the status message and the clipboard. Pure: takes events, returns
+//! `Flow`.
 
 use std::time::{Duration, Instant};
 
@@ -13,8 +14,12 @@ use crate::keys::{Action, classify};
 use crate::text::normalize_newlines;
 use crate::ui::text_area;
 
-pub const QUIT_PROMPT: &str = "Unsaved changes — y: save & quit  n: discard  Esc: cancel";
-pub const HINT: &str = "Ctrl-S save · Ctrl-Q quit";
+/// Shown after the save error when quitting could not save.
+pub const QUIT_PROMPT: &str = "y: retry  n: discard changes  Esc: keep editing";
+/// Default status-bar text; saving is automatic so quitting is all to learn.
+pub const HINT: &str = "Ctrl-Q to quit";
+/// Idle time after the last change before the buffer is written.
+pub const AUTOSAVE_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flow {
@@ -35,6 +40,7 @@ pub struct App {
     message: Option<String>,
     clipboard: Box<dyn Clipboard>,
     size: (u16, u16),
+    autosave_at: Option<Instant>,
 }
 
 impl App {
@@ -53,6 +59,7 @@ impl App {
             message: None,
             clipboard,
             size: (width, height),
+            autosave_at: None,
         }
     }
 
@@ -80,29 +87,54 @@ impl App {
         self.editor.set_viewport(width, height);
     }
 
-    pub fn next_deadline(&self) -> Option<Duration> {
-        self.editor.next_deadline()
+    /// How long the event loop may sleep before `advance` has work to do.
+    pub fn next_deadline(&self, now: Instant) -> Option<Duration> {
+        let autosave = self.autosave_at.map(|at| at.saturating_duration_since(now));
+        match (self.editor.next_deadline(), autosave) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
-    /// Drives drag auto-scroll; true when something changed.
+    /// Drives drag auto-scroll and the autosave timer; true when the screen changed.
     pub fn advance(&mut self, now: Instant) -> bool {
         let effect = self.editor.advance(now);
-        let changed = effect != Effect::Nothing;
+        let mut changed = effect != Effect::Nothing;
         self.apply_effect(effect);
+        if self.autosave_at.is_some_and(|at| at <= now) {
+            self.autosave_at = None;
+            if let Err(message) = self.save() {
+                self.message = Some(message);
+            }
+            changed = true;
+        }
         changed
     }
 
     pub fn handle_event(&mut self, event: Event, now: Instant) -> Flow {
+        let before = self.editor.mutations();
+        let flow = self.dispatch_event(event, now);
+        // Each change pushes the deadline back, so the write lands once typing pauses.
+        if self.editor.mutations() != before {
+            self.autosave_at = Some(now + AUTOSAVE_DELAY);
+        }
+        if !self.is_dirty() {
+            self.autosave_at = None;
+        }
+        flow
+    }
+
+    fn dispatch_event(&mut self, event: Event, now: Instant) -> Flow {
         match event {
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
                     return Flow::Continue;
                 }
-                self.message = None;
                 self.editor.clear_pin();
                 if self.mode == Mode::QuitPrompt {
                     return self.prompt_key(key);
                 }
+                self.message = None;
                 match classify(key) {
                     Some(action) => self.action(action),
                     None => Flow::Continue,
@@ -137,14 +169,7 @@ impl App {
         let chord = key.modifiers.intersects(chords);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('y' | 'Y') if !chord => match self.save() {
-                Ok(_) => Flow::Quit,
-                Err(message) => {
-                    self.mode = Mode::Normal;
-                    self.message = Some(message);
-                    Flow::Continue
-                }
-            },
+            KeyCode::Char('y' | 'Y') if !chord => self.save_and_quit(),
             KeyCode::Char('n' | 'N') if !chord => Flow::Quit,
             KeyCode::Esc => self.cancel_prompt(),
             KeyCode::Char('q' | 'c') if ctrl => self.cancel_prompt(),
@@ -154,7 +179,22 @@ impl App {
 
     fn cancel_prompt(&mut self) -> Flow {
         self.mode = Mode::Normal;
+        self.message = None;
         Flow::Continue
+    }
+
+    /// Quits once the buffer is on disk; a failed write opens the prompt with the error.
+    fn save_and_quit(&mut self) -> Flow {
+        match self.save() {
+            Ok(_) => Flow::Quit,
+            Err(message) => {
+                // The prompt swallows the mouse-up, so forget any drag now.
+                self.editor.end_drag();
+                self.mode = Mode::QuitPrompt;
+                self.message = Some(message);
+                Flow::Continue
+            }
+        }
     }
 
     fn action(&mut self, action: Action) -> Flow {
@@ -165,24 +205,13 @@ impl App {
                 };
                 self.message = Some(message);
             }
-            Action::Quit => {
-                if self.is_dirty() {
-                    // The prompt swallows the mouse-up, so forget any drag now.
-                    self.editor.end_drag();
-                    self.mode = Mode::QuitPrompt;
-                } else {
-                    return Flow::Quit;
-                }
-            }
+            Action::Quit => return self.save_and_quit(),
             Action::Paste => {
                 if let Some(text) = self.clipboard.get() {
                     let text = normalize_newlines(&text);
                     let effect = self.editor.insert_text(&text);
                     self.apply_effect(effect);
                 }
-            }
-            Action::Copy if self.editor.selection().is_none() => {
-                self.message = Some(HINT.to_string());
             }
             other => {
                 let effect = self.editor.handle(other);
@@ -255,22 +284,43 @@ mod tests {
         }
     }
 
+    /// Points the document at a path whose parent is a regular file, so saves fail.
+    fn block_saves(app: &mut App) {
+        let blocker = app.doc.path.parent().unwrap().join("blocker");
+        fs::write(&blocker, "").unwrap();
+        app.doc.path = blocker.join("child.md");
+    }
+
     #[test]
-    fn quit_prompt_state_machine() {
+    fn quit_saves_first_and_only_prompts_when_the_save_fails() {
         let mut app = make_app("");
         assert_eq!(ctrl(&mut app, 'q'), Flow::Quit);
         plain(&mut app, 'x');
+        assert_eq!(ctrl(&mut app, 'q'), Flow::Quit);
+        assert_eq!(fs::read_to_string(&app.doc.path).unwrap(), "x");
+        cleanup(&app);
+
+        let mut app = make_app("");
+        block_saves(&mut app);
+        plain(&mut app, 'x');
         assert_eq!(ctrl(&mut app, 'q'), Flow::Continue);
         assert_eq!(app.mode(), Mode::QuitPrompt);
+        let error = app.message().unwrap().to_string();
         assert_eq!(plain(&mut app, 'z'), Flow::Continue);
         assert_eq!(app.mode(), Mode::QuitPrompt);
+        assert_eq!(app.message(), Some(error.as_str()));
         assert_eq!(app.editor.text(), "x");
         let paste = Event::Paste("ignored".to_string());
         assert_eq!(app.handle_event(paste, Instant::now()), Flow::Continue);
         assert_eq!(app.editor.text(), "x");
-        let flow = key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(flow, Flow::Continue);
+        assert_eq!(plain(&mut app, 'y'), Flow::Continue);
+        assert_eq!(app.mode(), Mode::QuitPrompt);
+        assert_eq!(
+            key(&mut app, KeyCode::Esc, KeyModifiers::NONE),
+            Flow::Continue
+        );
         assert_eq!(app.mode(), Mode::Normal);
+        assert_eq!(app.message(), None);
         ctrl(&mut app, 'q');
         assert_eq!(ctrl(&mut app, 'q'), Flow::Continue);
         assert_eq!(app.mode(), Mode::Normal);
@@ -284,24 +334,44 @@ mod tests {
     }
 
     #[test]
-    fn prompt_y_saves_and_quits_or_reports_failure() {
+    fn autosave_fires_after_idle_and_reports_failures_once() {
         let mut app = make_app("");
-        plain(&mut app, 'x');
-        ctrl(&mut app, 'q');
-        assert_eq!(plain(&mut app, 'y'), Flow::Quit);
-        assert_eq!(fs::read_to_string(&app.doc.path).unwrap(), "x");
+        let t = Instant::now();
+        assert_eq!(app.next_deadline(t), None);
+        app.handle_event(
+            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            t,
+        );
+        assert_eq!(app.next_deadline(t), Some(AUTOSAVE_DELAY));
+        let later = t + AUTOSAVE_DELAY / 2;
+        let right = Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        app.handle_event(right, later);
+        assert_eq!(app.next_deadline(later), Some(AUTOSAVE_DELAY / 2));
+        let typed = Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        app.handle_event(typed, later);
+        assert_eq!(app.next_deadline(later), Some(AUTOSAVE_DELAY));
+        assert!(!app.advance(later + AUTOSAVE_DELAY / 2));
+        assert!(app.is_dirty());
+        assert!(app.advance(later + AUTOSAVE_DELAY));
+        assert!(!app.is_dirty());
+        assert_eq!(fs::read_to_string(&app.doc.path).unwrap(), "ba");
+        assert_eq!(app.message(), None);
+        assert_eq!(app.next_deadline(later + AUTOSAVE_DELAY), None);
+        ctrl(&mut app, 'z');
+        assert!(app.is_dirty());
+        assert!(app.next_deadline(Instant::now()).is_some());
         cleanup(&app);
 
         let mut app = make_app("");
-        let file = app.doc.path.parent().unwrap().join("blocker");
-        fs::write(&file, "").unwrap();
-        app.doc.path = file.join("child.md");
-        plain(&mut app, 'x');
-        ctrl(&mut app, 'q');
-        assert_eq!(plain(&mut app, 'y'), Flow::Continue);
-        assert_eq!(app.mode(), Mode::Normal);
+        block_saves(&mut app);
+        app.handle_event(
+            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            t,
+        );
+        assert!(app.advance(t + AUTOSAVE_DELAY));
         assert!(app.message().is_some());
         assert!(app.is_dirty());
+        assert_eq!(app.next_deadline(t + AUTOSAVE_DELAY), None);
         cleanup(&app);
     }
 
@@ -331,13 +401,12 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_hints_or_copies_and_paste_normalises() {
+    fn ctrl_c_copies_only_a_selection_and_paste_normalises() {
         let mut app = make_app("ab");
         ctrl(&mut app, 'c');
-        assert_eq!(app.message(), Some(HINT));
         assert_eq!(app.editor.text(), "ab");
+        assert_eq!(app.clipboard.get(), None);
         key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
-        assert_eq!(app.message(), None);
         ctrl(&mut app, 'c');
         assert_eq!(app.message(), None);
         assert_eq!(app.clipboard.get(), Some("a".to_string()));

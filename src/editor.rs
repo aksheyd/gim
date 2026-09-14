@@ -57,6 +57,7 @@ pub struct Editor {
     layout_stale: bool,
     viewport: Viewport,
     pinned_scroll: Option<usize>,
+    mutations: u64,
     pub(crate) mouse: MouseState,
 }
 
@@ -132,6 +133,7 @@ impl Editor {
             sticky_col: None,
             layout,
             layout_stale: false,
+            mutations: 0,
             viewport: Viewport {
                 width,
                 height,
@@ -351,7 +353,13 @@ impl Editor {
         self.sticky_col = None;
         self.pinned_scroll = None;
         self.layout_stale = true;
+        self.mutations += 1;
         self.clamp_mouse_anchor();
+    }
+
+    /// Count of text mutations so far, including undo and redo.
+    pub fn mutations(&self) -> u64 {
+        self.mutations
     }
 
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>) {

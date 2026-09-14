@@ -45,15 +45,18 @@ Requires a stable Rust toolchain (1.88 or newer).
 | Ctrl-Y | Reinsert the last deleted word or line |
 | Ctrl-Z, Cmd-Z | Undo |
 | Ctrl-Shift-Z, Cmd-Shift-Z, Option-z, Ctrl-R | Redo |
-| Ctrl-C, Cmd-C | Copy the selection (without one: shows a hint, never quits) |
+| Ctrl-C, Cmd-C | Copy the selection (without one: does nothing, never quits) |
 | Ctrl-X, Cmd-X | Cut the selection |
 | Ctrl-V, Cmd-V | Paste |
-| Ctrl-S, Cmd-S | Save |
-| Ctrl-Q | Quit; asks first if there are unsaved changes |
+| Ctrl-S, Cmd-S | Save now (saving is automatic; this just reports it) |
+| Ctrl-Q | Save and quit |
 | Ctrl-L | Scroll the cursor row to the middle |
 
-In the unsaved-changes prompt: `y` saves and quits, `n` discards, and Esc,
-Ctrl-Q or Ctrl-C return to editing.
+Saving is automatic: the file is written one second after you stop typing and
+again when you quit, so Ctrl-Q is all you need. The status line shows `[+]`
+while a change is not yet on disk. If a write fails, the error appears in the
+status line; if that happens on quit, a prompt offers `y` to retry, `n` to
+discard the changes, and Esc, Ctrl-Q or Ctrl-C to keep editing.
 
 Word deletes (Option-Backspace, Option-d, Ctrl-W, Ctrl-U, Ctrl-K) go to a
 single kill slot that Ctrl-Y reinserts; consecutive kills replace it rather
@@ -91,6 +94,8 @@ moving the cursor.
 ## Limitations
 
 - No search, no line numbers, no syntax highlighting, no configuration file.
-- One undo history per run; nothing is recovered if the process is killed.
+- One undo history per run. If the process is killed, at most the last second
+  of typing is lost.
+- No file locking: two gim windows on the same file overwrite each other.
 - Mixed line endings: the first ending found decides how the file is saved;
   stray carriage returns in an LF file are shown as `?` and kept.
