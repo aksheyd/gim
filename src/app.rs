@@ -15,7 +15,7 @@ use crate::text::normalize_newlines;
 use crate::ui::text_area;
 
 /// Shown after the save error when quitting could not save.
-pub const QUIT_PROMPT: &str = "y: retry  n: discard changes  Esc: keep editing";
+pub const QUIT_PROMPT: &str = "y: retry  n: quit without saving  Esc: keep editing";
 /// Default status-bar text; saving is automatic so quitting is all to learn.
 pub const HINT: &str = "Ctrl-Q to quit";
 /// Idle time after the last change before the buffer is written.
@@ -120,6 +120,11 @@ impl App {
         }
         if !self.is_dirty() {
             self.autosave_at = None;
+        }
+        // The state outlives the quitting window when shared, so the prompt must not linger.
+        if flow == Flow::Quit {
+            self.mode = Mode::Normal;
+            self.message = None;
         }
         flow
     }
@@ -228,7 +233,7 @@ impl App {
     }
 
     /// Saves unless nothing changed; returns the status message either way.
-    fn save(&mut self) -> Result<String, String> {
+    pub fn save(&mut self) -> Result<String, String> {
         if self.doc.exists && !self.is_dirty() {
             return Ok("no changes".to_string());
         }
@@ -329,7 +334,22 @@ mod tests {
         assert_eq!(app.mode(), Mode::Normal);
         ctrl(&mut app, 'q');
         assert_eq!(plain(&mut app, 'n'), Flow::Quit);
+        assert_eq!(app.mode(), Mode::Normal);
+        assert_eq!(app.message(), None);
         assert!(!app.doc.path.exists());
+        cleanup(&app);
+
+        let mut app = make_app("");
+        block_saves(&mut app);
+        plain(&mut app, 'x');
+        assert_eq!(ctrl(&mut app, 'q'), Flow::Continue);
+        assert_eq!(app.mode(), Mode::QuitPrompt);
+        let blocker = app.doc.path.parent().unwrap().to_path_buf();
+        fs::remove_file(&blocker).unwrap();
+        assert_eq!(plain(&mut app, 'y'), Flow::Quit);
+        assert_eq!(app.mode(), Mode::Normal);
+        assert_eq!(app.message(), None);
+        assert_eq!(fs::read_to_string(&app.doc.path).unwrap(), "x");
         cleanup(&app);
     }
 

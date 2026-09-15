@@ -134,6 +134,24 @@ pub struct SaveOutcome {
     pub atomic: bool,
 }
 
+/// The real file behind `path`: the canonical path when it exists, else the
+/// canonical parent joined with the file name. The parent must exist.
+pub fn canonical_target(path: &Path) -> io::Result<PathBuf> {
+    let Some(name) = path.file_name() else {
+        return Err(io::Error::other("path has no file name"));
+    };
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    // Resolve symlinks so the real file is replaced, not the link.
+    match fs::canonicalize(path) {
+        Ok(real) => Ok(real),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(fs::canonicalize(&parent)?.join(name)),
+        Err(e) => Err(e),
+    }
+}
+
 /// Writes `text` to the document's path: temp file next to the resolved
 /// target plus rename, falling back to an in-place write only when the
 /// directory refuses the temp file but the target itself is writable.
@@ -146,12 +164,7 @@ pub fn save(doc: &mut Document, text: &str) -> io::Result<SaveOutcome> {
         _ => PathBuf::from("."),
     };
     fs::create_dir_all(&parent)?;
-    // Resolve symlinks so the real file is replaced, not the link.
-    let target = match fs::canonicalize(&doc.path) {
-        Ok(real) => real,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => fs::canonicalize(&parent)?.join(name),
-        Err(e) => return Err(e),
-    };
+    let target = canonical_target(&doc.path)?;
     let dir = match target.parent() {
         Some(dir) => dir.to_path_buf(),
         None => PathBuf::from("."),

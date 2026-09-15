@@ -5,13 +5,41 @@ text-field conventions: Ctrl-A/E, Option-arrows, Shift-arrows to select,
 Ctrl-Z to undo. Soft wrap, mouse selection, one file at a time.
 
 ```
-gim            # opens your default notes file
-gim notes.md   # opens a specific file
+gim                  # opens your default notes file
+gim notes.md         # opens a specific file
+gim --local [FILE]   # edit in this process only, no daemon
+gim --kill [FILE]    # save and stop the daemon for a file
 ```
 
 The default notes file is `$GIM_NOTES` if set, else `$XDG_DATA_HOME/gim/notes.md`,
-else `~/.local/share/gim/notes.md`. Missing files (and their directories) are
-created on the first save.
+else `~/.local/share/gim/notes.md`. Missing files are created on the first
+save; with the daemon the parent directory must already exist (`--local`
+creates it).
+
+## How it runs
+
+Every `gim` window on the same file shares one editor: text, cursor,
+selection, undo history, scroll position and status line are identical
+everywhere and move in tandem, like two tmux clients on one session. The
+first window starts a daemon for the file; the daemon owns the editor and
+keeps running after every window closes, so opening `gim` again picks up
+exactly where you left off. Ctrl-Q saves and closes only the window you
+pressed it in.
+
+- The shared screen is the smallest attached terminal, so a small window
+  shrinks the view in the others; bigger windows leave the rest blank.
+- `gim --kill [FILE]` saves and stops the daemon; every window exits cleanly.
+  If the save fails the daemon refuses and stays up.
+- One daemon per real file: relative paths and symlinks to the same file
+  share it, and the status line shows the target's name.
+- The daemon lives in `~/.local/state/gim/run/` (or `$XDG_STATE_HOME/gim/run/`)
+  as `<hash>.sock`, with `<hash>.log` (truncated at each start) and a
+  `<hash>.lock` used only while a daemon is being started (never removed,
+  harmless). Removing the socket file force-stops the daemon within a second
+  (it still tries to save first).
+- `gim --local` is the old single-process editor and is refused while a
+  daemon holds the file. It is also the fallback when `HOME` is unset or the
+  state directory cannot be created.
 
 ## Install
 
@@ -19,7 +47,7 @@ created on the first save.
 cargo install --path .
 ```
 
-Requires a stable Rust toolchain (1.88 or newer).
+Requires a stable Rust toolchain (1.89 or newer).
 
 ## Keys
 
@@ -49,14 +77,15 @@ Requires a stable Rust toolchain (1.88 or newer).
 | Ctrl-X, Cmd-X | Cut the selection |
 | Ctrl-V, Cmd-V | Paste |
 | Ctrl-S, Cmd-S | Save now (saving is automatic; this just reports it) |
-| Ctrl-Q | Save and quit |
+| Ctrl-Q | Save and close this window |
 | Ctrl-L | Scroll the cursor row to the middle |
 
 Saving is automatic: the file is written one second after you stop typing and
 again when you quit, so Ctrl-Q is all you need. The status line shows `[+]`
 while a change is not yet on disk. If a write fails, the error appears in the
 status line; if that happens on quit, a prompt offers `y` to retry, `n` to
-discard the changes, and Esc, Ctrl-Q or Ctrl-C to keep editing.
+quit without saving (the daemon keeps the text), and Esc, Ctrl-Q or Ctrl-C to
+keep editing. The prompt is shared, so any window may answer it.
 
 Word deletes (Option-Backspace, Option-d, Ctrl-W, Ctrl-U, Ctrl-K) go to a
 single kill slot that Ctrl-Y reinserts; consecutive kills replace it rather
@@ -94,8 +123,11 @@ moving the cursor.
 ## Limitations
 
 - No search, no line numbers, no syntax highlighting, no configuration file.
-- One undo history per run. If the process is killed, at most the last second
-  of typing is lost.
-- No file locking: two gim windows on the same file overwrite each other.
+- One undo history per daemon. If the daemon is killed, at most the last
+  second of typing is lost; the undo history goes with it.
+- The daemon never re-reads the file: edits made on disk by another program
+  while it runs are overwritten by the next autosave. Stop it with
+  `gim --kill` before editing the file elsewhere.
+- The daemon has no idle exit; it stays until `--kill` or its socket is removed.
 - Mixed line endings: the first ending found decides how the file is saved;
   stray carriage returns in an LF file are shown as `?` and kept.
