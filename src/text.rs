@@ -1,6 +1,3 @@
-//! Pure helpers over `&str`: grapheme boundaries, word and line ranges,
-//! display widths and newline normalisation.
-
 use std::borrow::Cow;
 use std::ops::Range;
 
@@ -10,14 +7,12 @@ use unicode_width::UnicodeWidthStr;
 use crate::buffer::Pos;
 use crate::wrap::TAB_STOP;
 
-/// Word motion flavour: `Word` stops at symbol runs, `BigWord` only at spaces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WordKind {
     Word,
     BigWord,
 }
 
-/// Character class used by word motions and double-click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CharClass {
     Space,
@@ -25,7 +20,6 @@ pub enum CharClass {
     Symbol,
 }
 
-/// Clamps `pos` into the text and steps down to a `char` boundary.
 fn char_floor(text: &str, pos: usize) -> usize {
     let mut p = pos.min(text.len());
     while !text.is_char_boundary(p) {
@@ -38,7 +32,6 @@ fn cursor_at(text: &str, pos: usize) -> GraphemeCursor {
     GraphemeCursor::new(pos, text.len(), true)
 }
 
-/// True when `pos` is an extended grapheme cluster boundary.
 pub fn is_boundary(text: &str, pos: Pos) -> bool {
     if pos > text.len() || !text.is_char_boundary(pos) {
         return false;
@@ -46,7 +39,6 @@ pub fn is_boundary(text: &str, pos: Pos) -> bool {
     cursor_at(text, pos).is_boundary(text, 0).unwrap_or(false)
 }
 
-/// Largest boundary strictly before `pos`; 0 at 0.
 pub fn prev_boundary(text: &str, pos: Pos) -> Pos {
     let p = char_floor(text, pos);
     if p == 0 {
@@ -58,7 +50,6 @@ pub fn prev_boundary(text: &str, pos: Pos) -> Pos {
     }
 }
 
-/// Smallest boundary strictly after `pos`; `len` at `len`.
 pub fn next_boundary(text: &str, pos: Pos) -> Pos {
     let p = char_floor(text, pos);
     if p >= text.len() {
@@ -70,7 +61,6 @@ pub fn next_boundary(text: &str, pos: Pos) -> Pos {
     }
 }
 
-/// Largest boundary `<= pos`.
 pub fn floor_boundary(text: &str, pos: Pos) -> Pos {
     let p = char_floor(text, pos);
     if is_boundary(text, p) {
@@ -80,7 +70,6 @@ pub fn floor_boundary(text: &str, pos: Pos) -> Pos {
     }
 }
 
-/// Smallest boundary `>= pos`.
 pub fn ceil_boundary(text: &str, pos: Pos) -> Pos {
     let p = char_floor(text, pos);
     if p != pos.min(text.len()) || !is_boundary(text, p) {
@@ -90,7 +79,6 @@ pub fn ceil_boundary(text: &str, pos: Pos) -> Pos {
     }
 }
 
-/// Nearest boundary to `pos`; ties go left.
 pub fn nearest_boundary(text: &str, pos: Pos) -> Pos {
     let pos = pos.min(text.len());
     let lo = floor_boundary(text, pos);
@@ -101,25 +89,26 @@ pub fn nearest_boundary(text: &str, pos: Pos) -> Pos {
     if pos - lo <= hi - pos { lo } else { hi }
 }
 
-/// The grapheme starting at boundary `pos`, or `None` at the end.
+pub fn slice(text: &str, range: Range<Pos>) -> &str {
+    text.get(range).unwrap_or_default()
+}
+
 pub fn grapheme_at(text: &str, pos: Pos) -> Option<&str> {
     if pos >= text.len() {
         None
     } else {
-        Some(&text[pos..next_boundary(text, pos)])
+        Some(slice(text, pos..next_boundary(text, pos)))
     }
 }
 
-/// The grapheme ending at boundary `pos`, or `None` at the start.
 pub fn grapheme_before(text: &str, pos: Pos) -> Option<&str> {
     if pos == 0 {
         None
     } else {
-        Some(&text[prev_boundary(text, pos)..pos])
+        Some(slice(text, prev_boundary(text, pos)..pos))
     }
 }
 
-/// Class of a grapheme, taken from its first `char`.
 pub fn char_class(grapheme: &str, kind: WordKind) -> CharClass {
     let c = grapheme.chars().next().unwrap_or(' ');
     if c.is_whitespace() {
@@ -131,7 +120,6 @@ pub fn char_class(grapheme: &str, kind: WordKind) -> CharClass {
     }
 }
 
-/// Skips spaces backward, then one same-class run. `\n` counts as space.
 pub fn word_left(text: &str, pos: Pos, kind: WordKind) -> Pos {
     let mut p = floor_boundary(text, pos);
     while let Some(g) = grapheme_before(text, p) {
@@ -153,7 +141,6 @@ pub fn word_left(text: &str, pos: Pos, kind: WordKind) -> Pos {
     p
 }
 
-/// Skips spaces forward, then one same-class run. `\n` counts as space.
 pub fn word_right(text: &str, pos: Pos, kind: WordKind) -> Pos {
     let mut p = ceil_boundary(text, pos);
     while let Some(g) = grapheme_at(text, p) {
@@ -175,19 +162,18 @@ pub fn word_right(text: &str, pos: Pos, kind: WordKind) -> Pos {
     p
 }
 
-/// Byte after the previous `\n`, or 0.
 pub fn line_start(text: &str, pos: Pos) -> Pos {
     let pos = char_floor(text, pos);
-    text[..pos].rfind('\n').map_or(0, |i| i + 1)
+    slice(text, 0..pos).rfind('\n').map_or(0, |i| i + 1)
 }
 
-/// Byte of the next `\n`, or `len`.
 pub fn line_end(text: &str, pos: Pos) -> Pos {
     let pos = char_floor(text, pos);
-    text[pos..].find('\n').map_or(text.len(), |i| pos + i)
+    slice(text, pos..text.len())
+        .find('\n')
+        .map_or(text.len(), |i| pos + i)
 }
 
-/// Same-class run around `pos` for double-click; `None` on space or at the end.
 pub fn word_run_at(text: &str, pos: Pos) -> Option<Range<Pos>> {
     let pos = floor_boundary(text, pos);
     let g = grapheme_at(text, pos)?;
@@ -212,7 +198,6 @@ pub fn word_run_at(text: &str, pos: Pos) -> Option<Range<Pos>> {
     Some(start..end)
 }
 
-/// Logical line containing `pos`, including its trailing `\n` when present.
 pub fn line_range_with_newline(text: &str, pos: Pos) -> Range<Pos> {
     let start = line_start(text, pos);
     let end = line_end(text, pos);
@@ -220,7 +205,6 @@ pub fn line_range_with_newline(text: &str, pos: Pos) -> Range<Pos> {
     start..end
 }
 
-/// Converts `\r\n`, lone `\r`, U+2028 and U+2029 to `\n`.
 pub fn normalize_newlines(s: &str) -> Cow<'_, str> {
     if !s.contains(['\r', '\u{2028}', '\u{2029}']) {
         return Cow::Borrowed(s);
@@ -242,7 +226,6 @@ pub fn normalize_newlines(s: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Display width of one grapheme: tab is `TAB_STOP`, other controls are 1.
 pub fn grapheme_width(g: &str) -> usize {
     match g.chars().next() {
         None => 0,
@@ -252,7 +235,6 @@ pub fn grapheme_width(g: &str) -> usize {
     }
 }
 
-/// Display width of a string, summing `grapheme_width` over its graphemes.
 pub fn display_width(s: &str) -> usize {
     s.graphemes(true).map(grapheme_width).sum()
 }
@@ -272,14 +254,14 @@ mod tests {
         let mut steps = Vec::new();
         while p < text.len() {
             let n = next_boundary(&text, p);
-            steps.push(&text[p..n]);
+            steps.push(slice(&text, p..n));
             p = n;
         }
         assert_eq!(steps, ["a", ZWJ, FLAG, E_ACUTE, "한"]);
         let mut back = Vec::new();
         while p > 0 {
             let b = prev_boundary(&text, p);
-            back.push(&text[b..p]);
+            back.push(slice(&text, b..p));
             p = b;
         }
         back.reverse();

@@ -1,13 +1,9 @@
-//! Loading and saving: line-ending and BOM detection, atomic writes, the
-//! default notes path.
-
 use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// Files above this size are refused at load time.
 pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,12 +38,10 @@ impl Document {
         }
     }
 
-    /// Whether `text` differs from the last loaded or saved text.
     pub fn is_dirty(&self, text: &str) -> bool {
         text != self.saved_text
     }
 
-    /// Bytes as they would be written: BOM and line endings restored.
     pub fn encode(&self, text: &str) -> Vec<u8> {
         let mut out = Vec::with_capacity(text.len() + 3);
         if self.bom {
@@ -85,7 +79,6 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-/// Loads `path`; a missing file yields an empty, not-yet-existing document.
 pub fn load(path: &Path) -> Result<(Document, String), LoadError> {
     let mut doc = Document::new(path);
     let meta = match fs::metadata(path) {
@@ -120,10 +113,9 @@ pub fn load(path: &Path) -> Result<(Document, String), LoadError> {
     Ok((doc, text))
 }
 
-/// CRLF when the first line ending in the text is `\r\n`.
 fn detect_ending(text: &str) -> LineEnding {
     match text.find('\n') {
-        Some(i) if i > 0 && text.as_bytes()[i - 1] == b'\r' => LineEnding::Crlf,
+        Some(i) if i > 0 && text.as_bytes().get(i - 1) == Some(&b'\r') => LineEnding::Crlf,
         _ => LineEnding::Lf,
     }
 }
@@ -134,8 +126,6 @@ pub struct SaveOutcome {
     pub atomic: bool,
 }
 
-/// The real file behind `path`: the canonical path when it exists, else the
-/// canonical parent joined with the file name. The parent must exist.
 pub fn canonical_target(path: &Path) -> io::Result<PathBuf> {
     let Some(name) = path.file_name() else {
         return Err(io::Error::other("path has no file name"));
@@ -144,7 +134,6 @@ pub fn canonical_target(path: &Path) -> io::Result<PathBuf> {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    // Resolve symlinks so the real file is replaced, not the link.
     match fs::canonicalize(path) {
         Ok(real) => Ok(real),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(fs::canonicalize(&parent)?.join(name)),
@@ -152,9 +141,6 @@ pub fn canonical_target(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
-/// Writes `text` to the document's path: temp file next to the resolved
-/// target plus rename, falling back to an in-place write only when the
-/// directory refuses the temp file but the target itself is writable.
 pub fn save(doc: &mut Document, text: &str) -> io::Result<SaveOutcome> {
     let Some(name) = doc.path.file_name() else {
         return Err(io::Error::other("path has no file name"));
@@ -221,8 +207,6 @@ fn write_atomic(
     fs::rename(tmp, target)
 }
 
-/// `$GIM_NOTES`, else `$XDG_DATA_HOME/gim/notes.md`, else
-/// `~/.local/share/gim/notes.md`.
 pub fn default_notes_path() -> PathBuf {
     notes_path_from(
         std::env::var_os("GIM_NOTES"),
@@ -251,7 +235,6 @@ pub fn notes_path_from(
         .join("notes.md")
 }
 
-/// A fresh empty directory under the system temp dir, unique per call.
 #[cfg(test)]
 pub(crate) fn temp_dir() -> PathBuf {
     use std::sync::atomic::{AtomicUsize, Ordering};

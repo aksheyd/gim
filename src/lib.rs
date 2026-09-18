@@ -1,8 +1,3 @@
-//! A small terminal notes editor with no modes.
-//!
-//! The library holds everything except the terminal setup and the event
-//! loop, so the whole editing model is testable without a TTY.
-
 pub mod app;
 pub mod buffer;
 #[cfg(unix)]

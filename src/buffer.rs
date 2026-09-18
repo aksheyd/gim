@@ -1,14 +1,9 @@
-//! The text buffer: one `String`, LF-only, with a cursor on a grapheme
-//! boundary. `apply` is the only place that mutates the text.
-
 use std::ops::Range;
 
-use crate::text::{ceil_boundary, is_boundary, nearest_boundary};
+use crate::text::{ceil_boundary, is_boundary, nearest_boundary, slice};
 
-/// Byte offset into the buffer text.
 pub type Pos = usize;
 
-/// Undo category of an edit; drives group coalescing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditKind {
     Insert,
@@ -17,8 +12,6 @@ pub enum EditKind {
     Replace,
 }
 
-/// One text mutation: remove `range`, insert `text`, land the cursor at
-/// `cursor` (post-edit coordinates, snapped forward to a boundary).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edit {
     pub range: Range<Pos>,
@@ -27,8 +20,6 @@ pub struct Edit {
     pub kind: EditKind,
 }
 
-/// Exact record of an applied edit; replaying it backward restores the
-/// previous text byte for byte.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Delta {
     pub start: Pos,
@@ -66,20 +57,17 @@ impl Buffer {
         self.text.is_empty()
     }
 
-    /// Moves the cursor to the nearest grapheme boundary (ties go left).
     pub fn set_cursor(&mut self, pos: Pos) {
         self.cursor = nearest_boundary(&self.text, pos);
     }
 
-    /// Applies an edit and returns its inverse record, or `None` for a no-op.
-    /// The range is used as given; callers snap it to boundaries first.
     pub fn apply(&mut self, edit: Edit) -> Option<Delta> {
         let len = self.text.len();
         let start = edit.range.start.min(len);
         let end = edit.range.end.clamp(start, len);
         debug_assert!(is_boundary(&self.text, start));
         debug_assert!(is_boundary(&self.text, end));
-        let removed = &self.text[start..end];
+        let removed = slice(&self.text, start..end);
         if removed.is_empty() && edit.text.is_empty() {
             return None;
         }
@@ -101,8 +89,6 @@ impl Buffer {
         })
     }
 
-    /// Re-applies (`forward`) or reverts a recorded delta. Used by undo/redo
-    /// only; never snaps, so the text round-trips exactly.
     pub fn replay(&mut self, delta: &Delta, forward: bool) {
         let (old, new, cursor) = if forward {
             (&delta.removed, &delta.inserted, delta.cursor_after)
@@ -110,7 +96,7 @@ impl Buffer {
             (&delta.inserted, &delta.removed, delta.cursor_before)
         };
         let end = delta.start + old.len();
-        debug_assert_eq!(&self.text[delta.start..end], old.as_str());
+        debug_assert_eq!(slice(&self.text, delta.start..end), old.as_str());
         self.text.replace_range(delta.start..end, new);
         self.set_cursor(cursor);
     }

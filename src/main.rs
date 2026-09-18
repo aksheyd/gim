@@ -75,7 +75,6 @@ fn load(path: &Path) -> io::Result<(Document, String)> {
     file::load(path).map_err(io::Error::other)
 }
 
-/// The real file behind `path`, with the path in the error text.
 #[cfg(unix)]
 fn target_of(path: &Path) -> io::Result<PathBuf> {
     file::canonical_target(path).map_err(|e| {
@@ -87,7 +86,6 @@ fn target_of(path: &Path) -> io::Result<PathBuf> {
     })
 }
 
-/// Today's single-process editor; refused while a daemon owns the file.
 fn local(path: &Path) -> io::Result<ExitCode> {
     if daemon_holds(path) {
         let shown = path.display();
@@ -116,7 +114,6 @@ fn daemon_holds(_path: &Path) -> bool {
 #[cfg(unix)]
 fn open(path: &Path) -> io::Result<ExitCode> {
     use gim::client::Exit;
-    // Load first so a bad file is reported here, not by a daemon that then dies.
     load(path)?;
     let target = target_of(path)?;
     let paths = gim::daemon::paths(&target)?;
@@ -135,7 +132,6 @@ fn open(path: &Path) -> io::Result<ExitCode> {
 
 #[cfg(unix)]
 fn kill(path: &Path) -> io::Result<ExitCode> {
-    // A path that cannot be resolved has no daemon either.
     let stopped = match file::canonical_target(path) {
         Ok(target) => gim::daemon::kill(&gim::daemon::paths(&target)?)?,
         Err(_) => false,
@@ -151,7 +147,6 @@ fn kill(_path: &Path) -> io::Result<ExitCode> {
     Err(io::Error::other(NO_DAEMONS))
 }
 
-/// Stderr is the log here, and a full disk must not turn an error into a panic.
 #[cfg(unix)]
 fn daemon(path: &Path) -> ExitCode {
     use std::io::Write;
@@ -173,8 +168,6 @@ fn daemon(_path: &Path) -> ExitCode {
 #[cfg(not(unix))]
 const NO_DAEMONS: &str = "daemons are not supported on this platform; use gim --local";
 
-/// Sets up the terminal and runs the event loop until the app quits. The
-/// guard restores the terminal before this returns, so errors print cleanly.
 fn run(doc: Document, text: String) -> io::Result<()> {
     let (guard, mut terminal) = TerminalGuard::enter()?;
     terminal::install_panic_hook(guard.state());

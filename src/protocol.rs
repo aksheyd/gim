@@ -1,7 +1,3 @@
-//! Wire format between the daemon and its clients: length-prefixed JSON
-//! messages, and screen patches carrying only what `ui::draw` produces (a
-//! symbol and a reversed bit per cell, plus the cursor).
-
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
@@ -12,11 +8,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 1;
-/// Bound on one message body; a paste of a whole 4 MiB file fits with headroom.
 pub const MAX_MESSAGE: usize = 16 << 20;
-/// A peer that stops reading for this long is dropped rather than stalling the other side.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-/// The `Error` text for a malformed or out-of-order message.
 pub const PROTOCOL_ERROR: &str = "protocol error";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -37,7 +30,6 @@ pub enum ServerMsg {
     Error(String),
 }
 
-/// `(x, y, symbol, reversed)`; the tuple form keeps a full screen small.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CellUpdate(pub u16, pub u16, pub String, pub bool);
 
@@ -45,13 +37,11 @@ pub struct CellUpdate(pub u16, pub u16, pub String, pub bool);
 pub struct Patch {
     pub width: u16,
     pub height: u16,
-    /// Reset the mirror to blank `width x height` before applying `cells`.
     pub full: bool,
     pub cells: Vec<CellUpdate>,
     pub cursor: Option<(u16, u16)>,
 }
 
-/// Serialises `msg` behind a big-endian `u32` length in a single write.
 pub fn write_msg<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
     let body = serde_json::to_vec(msg)?;
     if body.len() > MAX_MESSAGE {
@@ -66,7 +56,6 @@ pub fn write_msg<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
     w.write_all(&framed)
 }
 
-/// Reads one message; `Ok(None)` only when the stream ends between messages.
 pub fn read_msg<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<Option<T>> {
     let mut header = [0u8; 4];
     match r.read_exact(&mut header[..1]) {
@@ -94,8 +83,6 @@ fn key(cell: &Cell) -> (&str, bool) {
     (cell.symbol(), cell.modifier.contains(Modifier::REVERSED))
 }
 
-/// Cells of `next` that differ from `prev`; `None` when nothing changed. A
-/// missing or differently sized `prev` yields a full patch of every non-blank cell.
 pub fn diff(
     prev: Option<&Buffer>,
     prev_cursor: Option<(u16, u16)>,
@@ -107,9 +94,9 @@ pub fn diff(
     let mut cells = Vec::new();
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
-            let now = key(&next[(x, y)]);
+            let now = next.cell((x, y)).map_or((" ", false), key);
             let changed = match prev {
-                Some(p) => key(&p[(x, y)]) != now,
+                Some(p) => p.cell((x, y)).map_or((" ", false), key) != now,
                 None => now != (" ", false),
             };
             if changed {
@@ -129,7 +116,6 @@ pub fn diff(
     })
 }
 
-/// Applies `patch` to `mirror`; cells outside the mirror are ignored.
 pub fn apply(patch: &Patch, mirror: &mut Buffer) {
     if patch.full {
         *mirror = Buffer::empty(Rect::new(0, 0, patch.width, patch.height));

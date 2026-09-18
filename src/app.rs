@@ -1,7 +1,3 @@
-//! Application state above the editor: the document, autosave, the quit
-//! prompt, the status message and the clipboard. Pure: takes events, returns
-//! `Flow`.
-
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -14,11 +10,8 @@ use crate::keys::{Action, classify};
 use crate::text::normalize_newlines;
 use crate::ui::text_area;
 
-/// Shown after the save error when quitting could not save.
 pub const QUIT_PROMPT: &str = "y: retry  n: quit without saving  Esc: keep editing";
-/// Default status-bar text; saving is automatic so quitting is all to learn.
 pub const HINT: &str = "Ctrl-Q to quit";
-/// Idle time after the last change before the buffer is written.
 pub const AUTOSAVE_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,7 +68,6 @@ impl App {
         self.doc.is_dirty(self.editor.text())
     }
 
-    /// Screen rectangle of the text view for the current size.
     pub fn text_rect(&self) -> Rect {
         text_area(Rect::new(0, 0, self.size.0, self.size.1))
     }
@@ -87,7 +79,6 @@ impl App {
         self.editor.set_viewport(width, height);
     }
 
-    /// How long the event loop may sleep before `advance` has work to do.
     pub fn next_deadline(&self, now: Instant) -> Option<Duration> {
         let autosave = self.autosave_at.map(|at| at.saturating_duration_since(now));
         match (self.editor.next_deadline(), autosave) {
@@ -96,7 +87,6 @@ impl App {
         }
     }
 
-    /// Drives drag auto-scroll and the autosave timer; true when the screen changed.
     pub fn advance(&mut self, now: Instant) -> bool {
         let effect = self.editor.advance(now);
         let mut changed = effect != Effect::Nothing;
@@ -114,14 +104,12 @@ impl App {
     pub fn handle_event(&mut self, event: Event, now: Instant) -> Flow {
         let before = self.editor.mutations();
         let flow = self.dispatch_event(event, now);
-        // Each change pushes the deadline back, so the write lands once typing pauses.
         if self.editor.mutations() != before {
             self.autosave_at = Some(now + AUTOSAVE_DELAY);
         }
         if !self.is_dirty() {
             self.autosave_at = None;
         }
-        // The state outlives the quitting window when shared, so the prompt must not linger.
         if flow == Flow::Quit {
             self.mode = Mode::Normal;
             self.message = None;
@@ -188,12 +176,10 @@ impl App {
         Flow::Continue
     }
 
-    /// Quits once the buffer is on disk; a failed write opens the prompt with the error.
     fn save_and_quit(&mut self) -> Flow {
         match self.save() {
             Ok(_) => Flow::Quit,
             Err(message) => {
-                // The prompt swallows the mouse-up, so forget any drag now.
                 self.editor.end_drag();
                 self.mode = Mode::QuitPrompt;
                 self.message = Some(message);
@@ -232,7 +218,6 @@ impl App {
         }
     }
 
-    /// Saves unless nothing changed; returns the status message either way.
     pub fn save(&mut self) -> Result<String, String> {
         if self.doc.exists && !self.is_dirty() {
             return Ok("no changes".to_string());
@@ -289,7 +274,6 @@ mod tests {
         }
     }
 
-    /// Points the document at a path whose parent is a regular file, so saves fail.
     fn block_saves(app: &mut App) {
         let blocker = app.doc.path.parent().unwrap().join("blocker");
         fs::write(&blocker, "").unwrap();

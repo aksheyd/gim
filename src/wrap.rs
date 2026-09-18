@@ -1,14 +1,10 @@
-//! Greedy soft wrapping. Rows are byte ranges into the text; a `\n` belongs
-//! to no row, and a whitespace run always stays on the row it follows.
-
 use std::ops::Range;
 
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::buffer::Pos;
-use crate::text::{display_width, grapheme_width};
+use crate::text::{display_width, grapheme_width, slice};
 
-/// A tab always occupies this many columns.
 pub const TAB_STOP: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,13 +13,12 @@ pub struct Layout {
     rows: Vec<Range<Pos>>,
 }
 
-/// Wraps `text` at `width` columns (clamped to at least 1).
 pub fn wrap(text: &str, width: usize) -> Layout {
     let width = width.max(1);
     let mut rows = Vec::new();
     let mut line_start = 0;
     loop {
-        let rel_end = text[line_start..].find('\n');
+        let rel_end = slice(text, line_start..text.len()).find('\n');
         let line_end = rel_end.map_or(text.len(), |i| line_start + i);
         wrap_line(text, line_start, line_end, width, &mut rows);
         if rel_end.is_none() {
@@ -35,7 +30,7 @@ pub fn wrap(text: &str, width: usize) -> Layout {
 }
 
 fn wrap_line(text: &str, start: Pos, end: Pos, width: usize, rows: &mut Vec<Range<Pos>>) {
-    let line = &text[start..end];
+    let line = slice(text, start..end);
     let mut row_start = start;
     let mut col = 0;
     let mut last_break: Option<Pos> = None;
@@ -60,8 +55,7 @@ fn wrap_line(text: &str, start: Pos, end: Pos, width: usize, rows: &mut Vec<Rang
             rows.push(row_start..cut);
             row_start = cut;
             last_break = None;
-            col = display_width(&text[cut..pos]);
-            // A wide grapheme can still overflow the moved word; hard-break it.
+            col = display_width(slice(text, cut..pos));
             if col + w > width && pos > row_start {
                 rows.push(row_start..pos);
                 row_start = pos;
@@ -86,22 +80,17 @@ impl Layout {
         self.rows.len()
     }
 
-    /// Last row whose start is `<= pos`; a cursor on a soft break lands on
-    /// the following row, a cursor on a `\n` stays on the row before it.
     pub fn row_of(&self, pos: Pos) -> usize {
         let idx = self.rows.partition_point(|r| r.start <= pos);
         idx.saturating_sub(1)
     }
 
-    /// Display width from the row start to `pos`.
     pub fn col_of(&self, text: &str, pos: Pos) -> usize {
-        let row = &self.rows[self.row_of(pos)];
+        let row = self.rows.get(self.row_of(pos)).cloned().unwrap_or(pos..pos);
         let pos = pos.clamp(row.start, row.end);
-        display_width(&text[row.start..pos])
+        display_width(slice(text, row.start..pos))
     }
 
-    /// Screen cell for `pos`, with a column at or past the width shown at the
-    /// start of the next row (which may not exist).
     pub fn visual_pos(&self, text: &str, pos: Pos) -> (usize, usize) {
         let row = self.row_of(pos);
         let col = self.col_of(text, pos);
@@ -112,14 +101,12 @@ impl Layout {
         }
     }
 
-    /// Position of the first grapheme on `row` whose right edge exceeds
-    /// `col`; past the painted width this is `visible_end`.
     pub fn pos_at(&self, text: &str, row: usize, col: usize) -> Pos {
         let Some(range) = self.rows.get(row) else {
             return text.len();
         };
         let mut x = 0;
-        for (i, g) in text[range.clone()].grapheme_indices(true) {
+        for (i, g) in slice(text, range.clone()).grapheme_indices(true) {
             if x >= self.width {
                 break;
             }
@@ -132,8 +119,6 @@ impl Layout {
         self.visible_end(text, row)
     }
 
-    /// End of the row's visible text: the row end for the last row of a
-    /// logical line, else the start of the trailing whitespace run.
     pub fn visible_end(&self, text: &str, row: usize) -> Pos {
         let Some(range) = self.rows.get(row) else {
             return text.len();
@@ -144,7 +129,7 @@ impl Layout {
             return range.end;
         }
         let mut end = range.end;
-        for (i, g) in text[range.clone()].grapheme_indices(true).rev() {
+        for (i, g) in slice(text, range.clone()).grapheme_indices(true).rev() {
             if g.chars().next().is_some_and(char::is_whitespace) {
                 end = range.start + i;
             } else {

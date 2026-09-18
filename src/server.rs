@@ -1,7 +1,3 @@
-//! The shared editor behind the daemon: one `App`, one off-screen terminal
-//! at the smallest attached size, and the messages each client should get.
-//! Pure: ids, events and times in; messages out. No sockets, threads or clocks.
-
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -17,7 +13,6 @@ use crate::ui;
 pub type ClientId = u64;
 pub type Out = Vec<(ClientId, ServerMsg)>;
 
-/// Largest dimension a client may claim; a buggy one must not force a giant screen.
 const MAX_DIM: u16 = 1000;
 
 pub struct Server {
@@ -25,14 +20,12 @@ pub struct Server {
     screen: Terminal<TestBackend>,
     clients: BTreeMap<ClientId, (u16, u16)>,
     size: (u16, u16),
-    /// The picture every client holds; `None` while nobody is attached.
     last: Option<Buffer>,
     last_cursor: Option<(u16, u16)>,
 }
 
 impl Server {
     pub fn new(app: App) -> Self {
-        // An in-memory backend cannot fail, so these `Ok` patterns are irrefutable.
         let Ok(screen) = Terminal::new(TestBackend::new(1, 1));
         Server {
             app,
@@ -52,8 +45,6 @@ impl Server {
         self.app.next_deadline(now)
     }
 
-    /// Adds a client; a newcomer that does not change the shared size only
-    /// receives the current picture, everyone else hears nothing.
     pub fn attach(&mut self, id: ClientId, width: u16, height: u16, now: Instant) -> Out {
         self.clients
             .insert(id, (width.clamp(1, MAX_DIM), height.clamp(1, MAX_DIM)));
@@ -73,13 +64,10 @@ impl Server {
         if self.clients.remove(&id).is_none() {
             return Vec::new();
         }
-        // The departed window can never send its mouse-up.
         self.app.editor.end_drag();
         self.relayout(now)
     }
 
-    /// Feeds one client's event to the editor; `Resize` only updates that
-    /// client's size, and a quit detaches just the sender.
     pub fn event(&mut self, id: ClientId, event: Event, now: Instant) -> Out {
         if !self.clients.contains_key(&id) {
             return Vec::new();
@@ -105,7 +93,6 @@ impl Server {
         }
     }
 
-    /// Saves; the caller says goodbye only when this succeeds.
     pub fn shutdown(&mut self) -> Result<(), String> {
         self.app.save().map(|_| ())
     }
@@ -116,7 +103,6 @@ impl Server {
         Some((width, height))
     }
 
-    /// Re-renders after the attached set or a client size changed.
     fn relayout(&mut self, now: Instant) -> Out {
         let Some(size) = self.shared_size() else {
             return self.broadcast();
@@ -131,8 +117,6 @@ impl Server {
         self.broadcast()
     }
 
-    /// Renders and sends what changed to everyone; with no clients the
-    /// picture is dropped so the next attach starts from a full patch.
     fn broadcast(&mut self) -> Out {
         if self.clients.is_empty() {
             self.last = None;
@@ -140,7 +124,6 @@ impl Server {
             return Vec::new();
         }
         let app = &self.app;
-        // The completed frame is the real picture; the backend keeps stale cells after wide glyphs.
         let Ok(done) = self.screen.draw(|f| ui::draw(app, f));
         let next = done.buffer.clone();
         let backend = self.screen.backend();
@@ -175,6 +158,7 @@ mod tests {
     use crate::clipboard::MemClipboard;
     use crate::file::{Document, temp_dir};
     use crate::protocol::{Patch, apply};
+    use crate::text::slice;
 
     const A: ClientId = 1;
     const B: ClientId = 2;
@@ -186,7 +170,6 @@ mod tests {
         Server::new(App::new(doc, text.to_string(), clipboard, 80, 24))
     }
 
-    /// Points the document at a path whose parent is a regular file, so saves fail.
     fn block_saves(server: &mut Server) -> std::path::PathBuf {
         let blocker = server.app.doc.path.parent().unwrap().join("blocker");
         fs::write(&blocker, "").unwrap();
@@ -214,7 +197,6 @@ mod tests {
 
     type Mirrors = BTreeMap<ClientId, Mirror>;
 
-    /// Applies each message to its client; `Bye` drops the client.
     fn deliver(mirrors: &mut Mirrors, out: &Out) {
         for (id, msg) in out {
             match msg {
@@ -234,8 +216,6 @@ mod tests {
         }
     }
 
-    /// Every attached client's mirror equals a fresh, independent render of
-    /// the app at the shared size, so a wrong buffer inside `broadcast` shows.
     fn check(server: &Server, mirrors: &Mirrors) {
         let Ok(mut fresh) = Terminal::new(TestBackend::new(server.size.0, server.size.1));
         let Ok(done) = fresh.draw(|f| ui::draw(&server.app, f));
@@ -331,7 +311,6 @@ mod tests {
         deliver(&mut m, &out);
         check(&s, &m);
 
-        // A bigger newcomer gets the standing picture; A hears nothing.
         let out = s.attach(C, 50, 12, t);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, C);
@@ -379,7 +358,7 @@ mod tests {
         check(&s, &m);
         assert_eq!(s.app.mode(), Mode::QuitPrompt);
         let status = row(&m, B, 9);
-        assert!(status.contains(&QUIT_PROMPT[..8]), "{status:?}");
+        assert!(status.contains(slice(QUIT_PROMPT, 0..8)), "{status:?}");
 
         let out = s.event(B, plain('n'), t);
         assert_eq!(out[0], (B, ServerMsg::Bye));
@@ -388,7 +367,7 @@ mod tests {
         assert_eq!(s.app.mode(), Mode::Normal);
         assert_eq!(s.clients(), 1);
         let status = row(&m, A, 9);
-        assert!(!status.contains(&QUIT_PROMPT[..8]), "{status:?}");
+        assert!(!status.contains(slice(QUIT_PROMPT, 0..8)), "{status:?}");
         assert_eq!(s.app.editor.text(), "x");
         let _ = fs::remove_dir_all(blocker.parent().unwrap());
     }
@@ -445,12 +424,10 @@ mod tests {
             deliver(m, &s.event(A, ev, t));
             check(s, m);
         };
-        // Select-all, a wide glyph, then ASCII over it: the stale-cell trap.
         go(&mut s, &mut m, key(KeyCode::Char('a'), KeyModifiers::ALT));
         assert!(look(&m[&A].buf.as_ref().unwrap()[(0, 0)]).1);
         go(&mut s, &mut m, plain('コ'));
         go(&mut s, &mut m, plain('x'));
-        // `コ` owns two cells, so its trailing blank shows as a space before the `x`.
         assert_eq!(row(&m, A, 0), "コ x     ");
         go(&mut s, &mut m, key(KeyCode::Char('a'), KeyModifiers::ALT));
         go(&mut s, &mut m, plain('x'));

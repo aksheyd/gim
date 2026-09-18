@@ -1,6 +1,3 @@
-//! Mouse handling on the text area: click, drag with auto-scroll, double and
-//! triple click, wheel. Time is always passed in, never read.
-
 use std::time::{Duration, Instant};
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -8,11 +5,9 @@ use ratatui::layout::{Position, Rect};
 
 use crate::buffer::Pos;
 use crate::editor::{Editor, Effect, Selection};
-use crate::text::{line_range_with_newline, prev_boundary, word_run_at};
+use crate::text::{line_range_with_newline, prev_boundary, slice, word_run_at};
 
-/// Clicks on the same cell within this window count as multi-clicks.
 pub const CLICK_INTERVAL: Duration = Duration::from_millis(500);
-/// Rows scrolled one at a time at this cadence while dragging outside.
 pub const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(60);
 
 #[derive(Clone, Copy, Debug)]
@@ -32,7 +27,6 @@ pub struct MouseState {
     auto_scroll: Option<AutoScroll>,
 }
 
-/// Wheel step by text-area height.
 pub fn wheel_step(height: usize) -> usize {
     if height <= 5 {
         1
@@ -50,12 +44,10 @@ impl Editor {
         effect
     }
 
-    /// How long the event loop may sleep before `advance` has work to do.
     pub fn next_deadline(&self) -> Option<Duration> {
         self.mouse.auto_scroll.map(|_| DRAG_SCROLL_INTERVAL)
     }
 
-    /// Advances drag auto-scroll; a no-op unless a drag is pending outside.
     pub fn advance(&mut self, now: Instant) -> Effect {
         if !self.mouse.dragging {
             self.mouse.auto_scroll = None;
@@ -66,7 +58,6 @@ impl Editor {
         effect
     }
 
-    /// Forgets an in-progress drag, e.g. when a prompt swallows the mouse-up.
     pub(crate) fn end_drag(&mut self) {
         self.mouse.dragging = false;
         self.mouse.dragged = false;
@@ -94,7 +85,6 @@ impl Editor {
         }
     }
 
-    /// Buffer position under a screen cell; below the last row is `len`.
     fn pos_at_cell(&self, area: Rect, column: u16, row: u16) -> Pos {
         let layout = self.layout();
         let text = self.text();
@@ -137,8 +127,7 @@ impl Editor {
             self.set_cursor(pos);
             return Effect::Redraw;
         };
-        let copied = self.text()[run.clone()].to_string();
-        // The cursor rests on the word's last grapheme rather than after it.
+        let copied = slice(self.text(), run.clone()).to_string();
         let last = prev_boundary(self.text(), run.end);
         self.set_selection(Some(Selection::new(run.start, run.end)));
         self.set_cursor(last);
@@ -151,7 +140,7 @@ impl Editor {
         if range.is_empty() {
             return Effect::Redraw;
         }
-        let copied = self.text()[range.clone()].to_string();
+        let copied = slice(self.text(), range.clone()).to_string();
         self.set_selection(Some(Selection::new(range.start, range.end)));
         Effect::Copy(copied)
     }
@@ -160,8 +149,6 @@ impl Editor {
         self.mouse.dragged = true;
         let below = ev.row >= area.bottom();
         let scroll = self.viewport().scroll;
-        // The text area starts at the top of the screen, so "above" is a drag
-        // reaching row 0 while scrolled from a row it did not start on.
         let from_elsewhere = match self.mouse.anchor {
             Some(anchor) => self.layout().row_of(anchor) != scroll,
             None => false,
@@ -210,7 +197,6 @@ impl Editor {
         let pos = self.row_pos(edge_row, auto.col);
         self.set_head(pos);
         if target == scroll {
-            // Nothing left to reveal: stop waking the loop until the pointer moves.
             self.mouse.auto_scroll = None;
             return if self.selection() == before {
                 Effect::Nothing
@@ -233,7 +219,7 @@ impl Editor {
             return Effect::Redraw;
         }
         match self.selection_range() {
-            Some(range) => Effect::Copy(self.text()[range].to_string()),
+            Some(range) => Effect::Copy(slice(self.text(), range).to_string()),
             None => Effect::Redraw,
         }
     }
@@ -260,7 +246,6 @@ impl Editor {
         Effect::Redraw
     }
 
-    /// Position at `col` on a layout row; rows past the end map to `len`.
     fn row_pos(&self, row: usize, col: usize) -> Pos {
         if row >= self.layout().row_count() {
             self.len()
@@ -269,7 +254,6 @@ impl Editor {
         }
     }
 
-    /// Moves the selection head (and cursor) during a drag.
     fn set_head(&mut self, head: Pos) {
         let anchor = self.mouse.anchor.unwrap_or(head);
         let selection = if head == anchor {

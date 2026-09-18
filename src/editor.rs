@@ -1,6 +1,3 @@
-//! The editing model: dispatches actions onto the buffer, owns undo, the
-//! kill slot, the selection, the sticky column and the viewport.
-
 use std::ops::Range;
 
 use crate::buffer::{Buffer, Edit, EditKind, Pos};
@@ -8,7 +5,7 @@ use crate::keys::{Action, DeleteKind, Motion};
 use crate::mouse::MouseState;
 use crate::text::{
     WordKind, ceil_boundary, floor_boundary, line_end, line_start, next_boundary, prev_boundary,
-    word_left, word_right,
+    slice, word_left, word_right,
 };
 use crate::undo::History;
 use crate::wrap::{Layout, wrap};
@@ -20,7 +17,6 @@ pub struct Viewport {
     pub scroll: usize,
 }
 
-/// `anchor` is where the selection started; `head` follows the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
     pub anchor: Pos,
@@ -37,8 +33,6 @@ impl Selection {
     }
 }
 
-/// What the caller should do after an action. Only `advance` distinguishes
-/// `Nothing` from `Redraw`; key events always redraw.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Nothing,
@@ -61,8 +55,6 @@ pub struct Editor {
     pub(crate) mouse: MouseState,
 }
 
-/// Minimal-scroll viewport rule: fits => 0; pinned => clamped pin; else keep
-/// the previous scroll unless the cursor row left the window.
 pub fn resolve_scroll(
     total: usize,
     cursor_row: usize,
@@ -88,7 +80,6 @@ pub fn resolve_scroll(
     }
 }
 
-/// Target of a horizontal motion; vertical motions return `pos` unchanged.
 fn horizontal_target(text: &str, pos: Pos, motion: Motion) -> Pos {
     let len = text.len();
     match motion {
@@ -121,8 +112,6 @@ fn horizontal_target(text: &str, pos: Pos, motion: Motion) -> Pos {
 }
 
 impl Editor {
-    /// The cursor starts at 0, so scroll 0 is already resolved and no
-    /// `ensure_layout` pass is needed here.
     pub fn new(text: String, width: usize, height: usize) -> Self {
         let layout = wrap(&text, width);
         Editor {
@@ -188,8 +177,6 @@ impl Editor {
         self.history.undo_len()
     }
 
-    /// The layout for the current viewport width; every entry point ends
-    /// with `ensure_layout`, so it is never stale between events.
     pub fn layout(&self) -> &Layout {
         &self.layout
     }
@@ -201,8 +188,6 @@ impl Editor {
         self.ensure_layout();
     }
 
-    /// Recomputes the layout if the text changed or the width differs, then
-    /// re-resolves the scroll offset.
     pub fn ensure_layout(&mut self) {
         let width = self.viewport.width.max(1);
         if self.layout_stale || self.layout.width() != width {
@@ -220,12 +205,10 @@ impl Editor {
         );
     }
 
-    /// Cursor cell in layout coordinates, phantom row included.
     pub fn visual_cursor(&self) -> (usize, usize) {
         self.layout.visual_pos(self.buf.text(), self.buf.cursor())
     }
 
-    /// Row count including a phantom row the cursor may sit on.
     pub fn total_rows(&self) -> usize {
         let (row, _) = self.visual_cursor();
         self.layout.row_count().max(row + 1)
@@ -237,7 +220,6 @@ impl Editor {
         effect
     }
 
-    /// Inserts `text` at the cursor, replacing any selection, as one step.
     pub fn insert_text(&mut self, text: &str) -> Effect {
         let at = self.cursor();
         let range = self.selection_range().unwrap_or(at..at);
@@ -246,7 +228,6 @@ impl Editor {
         Effect::Redraw
     }
 
-    /// Drops a wheel pin so the viewport follows the cursor again.
     pub(crate) fn clear_pin(&mut self) {
         self.pinned_scroll = None;
         self.ensure_layout();
@@ -264,9 +245,6 @@ impl Editor {
         }
     }
 
-    /// One match for every action. With a selection, motions collapse to an
-    /// edge first, inserts and yank replace it, deletes remove only it, and
-    /// anything not listed clears it before proceeding.
     fn dispatch(&mut self, action: Action) -> Effect {
         if action != Action::Recenter {
             self.pinned_scroll = None;
@@ -294,9 +272,11 @@ impl Editor {
                     self.edit(range, kill, EditKind::Replace);
                 }
             }
-            Action::Copy if selected => return Effect::Copy(self.buf.text()[range].to_string()),
+            Action::Copy if selected => {
+                return Effect::Copy(slice(self.buf.text(), range).to_string());
+            }
             Action::Cut if selected => {
-                let cut = self.buf.text()[range.clone()].to_string();
+                let cut = slice(self.buf.text(), range.clone()).to_string();
                 self.edit(range, String::new(), EditKind::Replace);
                 return Effect::Copy(cut);
             }
@@ -327,8 +307,6 @@ impl Editor {
         }
     }
 
-    /// The single funnel for text changes: snaps the range to grapheme
-    /// boundaries, applies, records undo, then resets derived state.
     fn edit(&mut self, range: Range<Pos>, text: String, kind: EditKind) {
         let start = floor_boundary(self.buf.text(), range.start);
         let end = ceil_boundary(self.buf.text(), range.end).max(start);
@@ -357,7 +335,6 @@ impl Editor {
         self.clamp_mouse_anchor();
     }
 
-    /// Count of text mutations so far, including undo and redo.
     pub fn mutations(&self) -> u64 {
         self.mutations
     }
@@ -379,7 +356,6 @@ impl Editor {
         self.pinned_scroll = None;
     }
 
-    /// Pins the viewport at `scroll` until the next cursor move or edit.
     pub(crate) fn pin_scroll(&mut self, scroll: usize) {
         self.pinned_scroll = Some(scroll);
         self.viewport.scroll = scroll;
@@ -479,8 +455,6 @@ impl Editor {
         self.viewport.height.saturating_sub(1).max(1) as isize
     }
 
-    /// Vertical motion over visual rows with a sticky column. The source row
-    /// is the unclamped row of the cursor, not the phantom cell it draws at.
     fn move_rows(&mut self, delta: isize) {
         let layout = &self.layout;
         let text = self.buf.text();
@@ -907,7 +881,6 @@ mod tests {
                     check_invariants(&e);
                 }
                 assert_eq!(e.text(), before);
-                // A fresh history per window keeps the depth cap out of the check.
                 let viewport = e.viewport();
                 e = editor(&before, viewport.width, viewport.height);
                 original = before;

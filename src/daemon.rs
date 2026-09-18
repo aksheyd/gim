@@ -1,6 +1,3 @@
-//! One daemon per notes file: socket naming, starting one on demand, and
-//! the accept and reader threads that feed the pure `Server`. Unix only.
-
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{self, File, TryLockError};
@@ -26,15 +23,12 @@ use crate::protocol::{
 };
 use crate::server::{ClientId, Out, Server};
 
-/// `sun_path` is 104 bytes on macOS; leave room for the terminator.
 const MAX_SOCK_PATH: usize = 100;
 const START_TRIES: u32 = 100;
 const START_INTERVAL: Duration = Duration::from_millis(50);
-/// Longest sleep between checks that the socket file is still ours.
 const WAKE_CAP: Duration = Duration::from_secs(1);
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
 const KILL_TIMEOUT: Duration = Duration::from_secs(10);
-/// Told to a client whose socket stopped draining; it may read this once it resumes.
 const STOPPED_READING: &str = "disconnected: this window stopped reading";
 
 #[derive(Debug)]
@@ -45,7 +39,6 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// Creates the private run directory; only spawners and daemons need it.
     fn prepare(&self) -> io::Result<()> {
         let dir = self.sock.parent().unwrap_or(Path::new("."));
         let created = fs::DirBuilder::new()
@@ -60,7 +53,6 @@ impl Paths {
     }
 }
 
-/// FNV-1a is fixed for good, so an upgrade never orphans a running daemon.
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for &b in bytes {
@@ -70,8 +62,6 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Socket, lock and log paths for `canonical` under the state directory.
-/// Touches nothing on disk.
 pub fn paths(canonical: &Path) -> io::Result<Paths> {
     paths_from(
         canonical,
@@ -104,18 +94,15 @@ pub fn paths_from(
     })
 }
 
-/// Whether a daemon currently answers on `sock`.
 pub fn probe(sock: &Path) -> bool {
     UnixStream::connect(sock).is_ok()
 }
 
-/// Connects to the daemon for `canonical`, starting one first when needed.
 pub fn ensure_running(canonical: &Path, paths: &Paths) -> io::Result<UnixStream> {
     if let Ok(stream) = UnixStream::connect(&paths.sock) {
         return Ok(stream);
     }
     paths.prepare()?;
-    // The lock serialises spawners and is released by the kernel if one dies.
     let lock = File::options()
         .read(true)
         .write(true)
@@ -127,7 +114,6 @@ pub fn ensure_running(canonical: &Path, paths: &Paths) -> io::Result<UnixStream>
         Ok(()) => {
             match UnixStream::connect(&paths.sock) {
                 Ok(stream) => return Ok(stream),
-                // Refused means the file outlived its daemon; nobody else can be binding it.
                 Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
                     let _ = fs::remove_file(&paths.sock);
                 }
@@ -171,7 +157,6 @@ fn spawn(canonical: &Path, paths: &Paths) -> io::Result<Child> {
         .spawn()
 }
 
-/// Asks the daemon on `paths.sock` to save and stop; `Ok(false)` when there is none.
 pub fn kill(paths: &Paths) -> io::Result<bool> {
     use io::ErrorKind::{ConnectionRefused, NotFound};
     let mut stream = match UnixStream::connect(&paths.sock) {
@@ -197,27 +182,20 @@ pub fn kill(paths: &Paths) -> io::Result<bool> {
     }
 }
 
-/// The `gim --daemon <path>` entry point: loads the file, takes the socket,
-/// then serves until told to stop. Stdout and stderr already go to the log.
 pub fn run(arg: &Path) -> io::Result<()> {
     let canonical = file::canonical_target(arg)?;
     let paths = paths(&canonical)?;
     paths.prepare()?;
-    // Append mode so this handle and the inherited stderr never overwrite each other.
     let log = File::options().create(true).append(true).open(&paths.log)?;
     let (doc, text) = file::load(&canonical).map_err(io::Error::other)?;
-    // `None` means another daemon already answers for this file; its log stays intact.
     let Some(listener) = bind(&paths.sock)? else {
         return Ok(());
     };
     log.set_len(0)?;
-    // The first client's `Hello` sets the real size; this only seeds the layout.
     let app = App::new(doc, text, default_clipboard(), 80, 24);
     serve(app, listener, &paths.sock, log)
 }
 
-/// Binds `sock`; `None` when another daemon already answers there. A stale
-/// file is an error: only a client holding the start lock may remove one.
 fn bind(sock: &Path) -> io::Result<Option<UnixListener>> {
     let listener = match UnixListener::bind(sock) {
         Ok(listener) => listener,
@@ -238,7 +216,6 @@ fn bind(sock: &Path) -> io::Result<Option<UnixListener>> {
     Ok(Some(listener))
 }
 
-/// Whether the file at `sock` is still the one we bound.
 fn owns(sock: &Path, ino: u64) -> bool {
     fs::symlink_metadata(sock).is_ok_and(|m| m.ino() == ino)
 }
@@ -246,12 +223,10 @@ fn owns(sock: &Path, ino: u64) -> bool {
 enum Incoming {
     Attached(ClientId, UnixStream),
     Msg(ClientId, ClientMsg),
-    /// The reader hit a malformed message; `Gone` follows.
     Bad(ClientId),
     Gone(ClientId),
 }
 
-/// A reader that dies for any reason still reports its client as gone.
 struct GoneOnDrop(ClientId, Sender<Incoming>);
 
 impl Drop for GoneOnDrop {
@@ -260,7 +235,6 @@ impl Drop for GoneOnDrop {
     }
 }
 
-/// Announces the connection (from here, so it precedes its first message), then forwards.
 fn read_loop(id: ClientId, mut reader: UnixStream, writer: UnixStream, tx: Sender<Incoming>) {
     let gone = GoneOnDrop(id, tx);
     if gone.1.send(Incoming::Attached(id, writer)).is_err() {
@@ -295,7 +269,6 @@ fn accept_loop(listener: UnixListener, tx: Sender<Incoming>, stop: Arc<AtomicBoo
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        // BSD hands the listener's non-blocking flag down to accepted sockets.
         if stream.set_nonblocking(false).is_err()
             || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
         {
@@ -316,14 +289,11 @@ fn accept_loop(listener: UnixListener, tx: Sender<Incoming>, stop: Arc<AtomicBoo
 
 struct Conn {
     stream: UnixStream,
-    /// Set once a valid `Hello` arrived; only then does `Server` know the client.
     live: bool,
 }
 
 type Conns = BTreeMap<ClientId, Conn>;
 
-/// Closes one connection, telling it why when `reply` is given, and detaches
-/// it from the editor if it was live.
 fn drop_conn(
     server: &mut Server,
     conns: &mut Conns,
@@ -335,7 +305,6 @@ fn drop_conn(
         return Vec::new();
     };
     if let Some(text) = reply {
-        // Never block on a peer that may have stopped reading; this also flips the reader's dup.
         let _ = conn.stream.set_nonblocking(true);
         let _ = protocol::write_msg(&mut conn.stream, &ServerMsg::Error(text.to_string()));
     }
@@ -347,8 +316,6 @@ fn drop_conn(
     }
 }
 
-/// Writes each message to its client; a failed write drops that client and
-/// sends whatever its departure changed for the others.
 fn flush(server: &mut Server, conns: &mut Conns, mut out: Out, now: Instant, log: &mut File) {
     while !out.is_empty() {
         let mut failed = Vec::new();
@@ -407,7 +374,6 @@ fn handle(
             let _ = writeln!(log, "client {id}: {PROTOCOL_ERROR}");
             out = drop_conn(server, conns, id, Some(PROTOCOL_ERROR), now);
         }
-        // `drop_conn`'s non-blocking flag reaches the reader's dup too, so a stray `Bad` follows.
         Incoming::Bad(_) => {}
         Incoming::Msg(id, msg) => {
             let Some(conn) = conns.get_mut(&id) else {
@@ -449,8 +415,6 @@ fn handle(
     (out, Step::Continue)
 }
 
-/// Runs the daemon until a `Shutdown` is accepted or the socket file is
-/// removed or replaced. Never unlinks a socket that is not its own.
 fn serve(app: App, listener: UnixListener, sock: &Path, mut log: File) -> io::Result<()> {
     let ino = fs::symlink_metadata(sock)?.ino();
     listener.set_nonblocking(true)?;
@@ -533,7 +497,6 @@ mod tests {
             let handle = thread::spawn({
                 let (sock, notes) = (paths.sock.clone(), notes.clone());
                 move || {
-                    // Built here because the clipboard makes `App` not `Send`.
                     let (doc, text) = file::load(&notes).unwrap();
                     let clipboard = Box::new(MemClipboard::default());
                     let app = App::new(doc, text, clipboard, 80, 24);
@@ -618,13 +581,11 @@ mod tests {
         assert_eq!(pa, pb);
         assert!(!pa.full);
 
-        // A connect-and-drop without Hello must not disturb the shared size.
         drop(UnixStream::connect(&d.paths.sock).unwrap());
         key(&mut b, 'y');
         assert!(!patch(&mut a).full);
         assert!(!patch(&mut b).full);
 
-        // Ctrl-Q with a key already in flight: the daemon's Bye must still be readable.
         let quit = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         protocol::write_msg(&mut a, &ClientMsg::Event(quit)).unwrap();
         let late = Event::Key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
@@ -715,7 +676,6 @@ mod tests {
     fn paths_are_stable_private_and_need_a_home() {
         assert_eq!(fnv1a64(b""), 0xcbf29ce484222325);
         assert_eq!(fnv1a64(b"a"), 0xaf63dc4c8601ec8c);
-        // The system temp dir is too long for a socket path on macOS.
         let dir = PathBuf::from("/tmp").join(format!("gim-paths-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let some = |p: &Path| Some(p.as_os_str().to_os_string());

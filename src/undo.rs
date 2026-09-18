@@ -1,8 +1,5 @@
-//! Undo history: inverse deltas grouped into steps.
-
 use crate::buffer::{Buffer, Delta, EditKind, Pos};
 
-/// Maximum number of undo groups kept; the oldest is evicted beyond this.
 pub const UNDO_DEPTH: usize = 100;
 
 #[derive(Clone, Debug)]
@@ -30,7 +27,6 @@ impl History {
         self.redo.len()
     }
 
-    /// Appends to the open group or starts a new one; clears redo.
     pub fn record(&mut self, delta: Delta) {
         let first_ws = delta.inserted.chars().next().map(char::is_whitespace);
         let last_ws = delta.inserted.chars().next_back().map(char::is_whitespace);
@@ -63,7 +59,6 @@ impl History {
         }
     }
 
-    /// Reverts the newest group; the cursor returns to where the group began.
     pub fn undo(&mut self, buf: &mut Buffer) -> bool {
         let Some(mut group) = self.undo.pop() else {
             return false;
@@ -78,8 +73,6 @@ impl History {
         true
     }
 
-    /// Re-applies the newest undone group; the cursor returns to where it
-    /// was when the group was undone.
     pub fn redo(&mut self, buf: &mut Buffer) -> bool {
         let Some(group) = self.redo.pop() else {
             return false;
@@ -93,7 +86,6 @@ impl History {
         true
     }
 
-    /// Forces the next recorded delta to start a new group.
     pub fn reset_batching(&mut self) {
         self.last_kind = None;
         self.last_cursor_after = None;

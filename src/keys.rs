@@ -1,5 +1,3 @@
-//! Stateless key classification: one `KeyEvent` in, one `Action` out.
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::text::WordKind;
@@ -33,7 +31,6 @@ pub enum DeleteKind {
 }
 
 impl DeleteKind {
-    /// Kill-kind deletes feed the kill slot; grapheme deletes do not.
     pub fn is_kill(self) -> bool {
         !matches!(self, DeleteKind::GraphemeBack | DeleteKind::GraphemeFwd)
     }
@@ -72,24 +69,20 @@ const CONTROL: KeyModifiers = KeyModifiers::CONTROL;
 const ALT: KeyModifiers = KeyModifiers::ALT;
 const SUPER: KeyModifiers = KeyModifiers::SUPER;
 
-/// Any modifier other than Shift is held.
 fn chord(raw: KeyModifiers) -> bool {
     raw.intersects(CONTROL | ALT | SUPER)
 }
 
-/// `want` is the only modifier held, ignoring Shift.
 fn only(raw: KeyModifiers, want: KeyModifiers) -> bool {
     raw.difference(SHIFT) == want
 }
 
-/// Maps a key press to an action; `None` for keys the editor ignores.
 pub fn classify(key: KeyEvent) -> Option<Action> {
     let raw = key.modifiers.intersection(SHIFT | CONTROL | ALT | SUPER);
     if let KeyCode::Char(c) = key.code
         && !chord(raw)
         && !c.is_control()
     {
-        // Kitty and Win32 report Shift+a as a lowercase char plus SHIFT.
         let c = if raw.contains(SHIFT) && c.is_ascii_lowercase() {
             c.to_ascii_uppercase()
         } else {
@@ -97,8 +90,6 @@ pub fn classify(key: KeyEvent) -> Option<Action> {
         };
         return Some(Action::Insert(c));
     }
-    // Some encodings report Shift+letter as an uppercase char with or without
-    // SHIFT; fold so the table only ever sees lowercase plus SHIFT.
     let (code, raw) = match key.code {
         KeyCode::Char(c) if c.is_ascii_uppercase() => {
             (KeyCode::Char(c.to_ascii_lowercase()), raw | SHIFT)
@@ -125,7 +116,6 @@ pub fn classify(key: KeyEvent) -> Option<Action> {
         KeyCode::Backspace => GRAPHEME_BACK,
         KeyCode::Char('h') if ctrl && alt => WORD_BACK,
         KeyCode::Char('h') if ctrl => GRAPHEME_BACK,
-        // Raw control bytes, for front ends that do not decode them into keys.
         KeyCode::Char('\u{7f}' | '\u{8}') => GRAPHEME_BACK,
         KeyCode::Delete if chord(raw) => WORD_FWD,
         KeyCode::Delete => GRAPHEME_FWD,
@@ -179,7 +169,6 @@ fn motion_of(code: KeyCode, raw: KeyModifiers) -> Option<Motion> {
         KeyCode::Char('e') if only(raw, CONTROL) => Motion::LineEndChain,
         KeyCode::Char('p') if only(raw, CONTROL) => Motion::Up,
         KeyCode::Char('n') if only(raw, CONTROL) => Motion::Down,
-        // Raw control bytes, for front ends that do not decode them into keys.
         KeyCode::Char('\u{2}') if !chord(raw) => Motion::Left,
         KeyCode::Char('\u{6}') if !chord(raw) => Motion::Right,
         _ => return None,

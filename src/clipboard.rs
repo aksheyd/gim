@@ -1,10 +1,5 @@
-//! Clipboard providers: an in-memory slot that always works and a system
-//! clipboard that mirrors into it.
-
 pub trait Clipboard {
-    /// Current clipboard text; `None` when empty or unavailable.
     fn get(&mut self) -> Option<String>;
-    /// Stores `text`; empty strings are never written.
     fn set(&mut self, text: &str);
 }
 
@@ -31,7 +26,6 @@ pub struct SystemClipboard {
 
 #[cfg(feature = "clipboard")]
 impl SystemClipboard {
-    /// `None` when no system clipboard is reachable (headless, SSH).
     pub fn new() -> Option<Self> {
         let inner = arboard::Clipboard::new().ok()?;
         Some(SystemClipboard {
@@ -59,7 +53,6 @@ impl Clipboard for SystemClipboard {
     }
 }
 
-/// The system clipboard when available, else the in-memory slot.
 pub fn default_clipboard() -> Box<dyn Clipboard> {
     system_clipboard().unwrap_or_else(|| Box::new(MemClipboard::default()))
 }

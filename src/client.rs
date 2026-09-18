@@ -1,6 +1,3 @@
-//! The thin end of a daemon connection: forwards terminal events, mirrors
-//! the daemon's screen and paints it. Knows nothing about editing.
-
 use std::io;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -16,7 +13,6 @@ use ratatui::layout::{Position, Rect};
 use crate::protocol::{self, ClientMsg, PROTOCOL_VERSION, ServerMsg, WRITE_TIMEOUT};
 use crate::terminal::{self, TerminalGuard};
 
-/// A daemon that cannot paint a first screen in this long is stuck.
 const FIRST_PATCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -29,14 +25,10 @@ pub enum Exit {
 enum Input {
     Local(Event),
     Remote(ServerMsg),
-    /// The socket closed cleanly between messages.
     Eof,
-    /// The socket failed mid-message or with a read error.
     Lost,
 }
 
-/// Whether a failed send means the daemon already closed its side, in which
-/// case the socket thread's `Bye` or EOF decides how this window exits.
 fn peer_closed(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
@@ -44,7 +36,6 @@ fn peer_closed(kind: io::ErrorKind) -> bool {
     )
 }
 
-/// Whether a send ran into the write timeout: the daemon is alive but not draining.
 fn stalled(kind: io::ErrorKind) -> bool {
     matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
 }
@@ -80,10 +71,7 @@ fn forward_socket(mut reader: UnixStream, tx: Sender<Input>) {
     }
 }
 
-/// Runs the terminal against `stream` until the daemon says goodbye or the
-/// connection ends. The terminal is restored before this returns.
 pub fn attach(mut stream: UnixStream, sock: &Path) -> io::Result<Exit> {
-    // The kitty query inside `enter` reads events, so no reader may run yet.
     let (guard, mut terminal) = TerminalGuard::enter()?;
     terminal::install_panic_hook(guard.state());
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
@@ -124,7 +112,6 @@ pub fn attach(mut stream: UnixStream, sock: &Path) -> io::Result<Exit> {
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => return Ok(Exit::DaemonGone),
         };
-        // Everything already queued is handled before one repaint.
         let inputs: Vec<Input> = std::iter::once(first).chain(rx.try_iter()).collect();
         for input in inputs {
             match input {
@@ -139,14 +126,12 @@ pub fn attach(mut stream: UnixStream, sock: &Path) -> io::Result<Exit> {
                 Input::Eof => return Ok(Exit::DaemonGone),
                 Input::Lost => return Ok(Exit::Error("connection to daemon lost".to_string())),
                 Input::Local(ev) => {
-                    // The shared size may not change, so repaint from the mirror regardless.
                     if matches!(ev, Event::Resize(..)) {
                         dirty = true;
                     }
                     let paste = matches!(&ev, Event::Paste(_));
                     match protocol::write_msg(&mut stream, &ClientMsg::Event(ev)) {
                         Ok(()) => {}
-                        // A paste too big for the wire is dropped; the connection survives.
                         Err(e) if paste && e.kind() == io::ErrorKind::InvalidData => {}
                         Err(e) if peer_closed(e.kind()) => {}
                         Err(e) if stalled(e.kind()) => {
@@ -160,7 +145,6 @@ pub fn attach(mut stream: UnixStream, sock: &Path) -> io::Result<Exit> {
     }
 }
 
-/// Copies the mirror into the frame's top-left; anything past the frame is skipped.
 fn paint(frame: &mut Frame, mirror: &Buffer, cursor: Option<(u16, u16)>) {
     let area = frame.area();
     let width = mirror.area.width.min(area.width);
@@ -168,7 +152,11 @@ fn paint(frame: &mut Frame, mirror: &Buffer, cursor: Option<(u16, u16)>) {
     let buf = frame.buffer_mut();
     for y in 0..height {
         for x in 0..width {
-            buf[(area.x + x, area.y + y)] = mirror[(x, y)].clone();
+            if let (Some(src), Some(dst)) =
+                (mirror.cell((x, y)), buf.cell_mut((area.x + x, area.y + y)))
+            {
+                *dst = src.clone();
+            }
         }
     }
     if let Some((x, y)) = cursor

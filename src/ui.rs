@@ -1,6 +1,3 @@
-//! Drawing: the text view, the hardware cursor and the status line. Reads
-//! `App` only; never recomputes layout.
-
 use std::ops::Range;
 
 use ratatui::Frame;
@@ -13,11 +10,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::app::{App, HINT, Mode, QUIT_PROMPT};
 use crate::buffer::Pos;
 use crate::file::LineEnding;
-use crate::text::{display_width, line_start};
+use crate::text::{display_width, line_start, slice};
 use crate::wrap::{Layout, TAB_STOP};
 
-/// The text area: everything above the status line, or the whole screen
-/// when there is only one row.
 pub fn text_area(size: Rect) -> Rect {
     let height = if size.height >= 2 {
         size.height - 1
@@ -38,7 +33,6 @@ pub struct TextView<'a> {
     pub selection: Option<Range<Pos>>,
 }
 
-/// One row as painted: tabs become spaces, control graphemes become `?`.
 fn display_row(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for g in segment.graphemes(true) {
@@ -58,7 +52,7 @@ impl Widget for TextView<'_> {
             let Some(row) = self.layout.rows().get(self.scroll + i) else {
                 break;
             };
-            let segment = &self.text[row.clone()];
+            let segment = slice(self.text, row.clone());
             buf.set_stringn(area.x, y, display_row(segment), width, Style::default());
             let Some(sel) = &self.selection else {
                 continue;
@@ -68,8 +62,8 @@ impl Widget for TextView<'_> {
             if start >= end {
                 continue;
             }
-            let x0 = display_width(&self.text[row.start..start]).min(width);
-            let x1 = display_width(&self.text[row.start..end]).min(width);
+            let x0 = display_width(slice(self.text, row.start..start)).min(width);
+            let x1 = display_width(slice(self.text, row.start..end)).min(width);
             if x1 > x0 {
                 let cells = Rect::new(area.x + x0 as u16, y, (x1 - x0) as u16, 1);
                 buf.set_style(cells, reversed());
@@ -111,10 +105,9 @@ pub fn draw(app: &App, frame: &mut Frame) {
     }
 }
 
-/// `Ln X, Col Y`, both 1-based; the column is a display width.
 pub fn cursor_label(text: &str, cursor: Pos) -> String {
-    let line = text[..cursor].matches('\n').count() + 1;
-    let col = display_width(&text[line_start(text, cursor)..cursor]) + 1;
+    let line = slice(text, 0..cursor).matches('\n').count() + 1;
+    let col = display_width(slice(text, line_start(text, cursor)..cursor)) + 1;
     format!("Ln {line}, Col {col}")
 }
 
@@ -151,14 +144,12 @@ fn paint_status(app: &App, area: Rect, buf: &mut Buffer) {
     let right = cursor_label(app.editor.text(), app.editor.cursor());
     let lw = display_width(&left);
     let rw = display_width(&right);
-    // The standing hint is the first thing to go when the bar is narrow.
     let hint_only = app.mode() == Mode::Normal && app.message().is_none();
     if hint_only && lw + 1 + display_width(&centre) + 1 + rw > width {
         centre.clear();
     }
     let cw = display_width(&centre);
     let y = area.y;
-    // Truncation priority when narrow: message, then name, then Ln/Col.
     if cw > 0 {
         if lw + 1 + cw + 1 + rw <= width {
             buf.set_stringn(area.x, y, &left, width, style);
@@ -321,7 +312,6 @@ mod tests {
         assert_eq!(row(&t, 0), "b");
         assert_eq!(cursor(&mut t), Some((0, 0)));
         let mut app = make_app("hello", 10, 1);
-        // A parent that is a regular file makes the quit-time save fail.
         let blocker = temp_dir().join("blocker");
         std::fs::write(&blocker, "").unwrap();
         app.doc.path = blocker.join("child.md");
