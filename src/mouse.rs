@@ -5,7 +5,7 @@ use ratatui::layout::{Position, Rect};
 
 use crate::buffer::Pos;
 use crate::editor::{Editor, Effect, Selection};
-use crate::text::{line_range_with_newline, prev_boundary, slice, word_run_at};
+use crate::text::{line_range_with_newline, prev_boundary, word_run_at};
 
 pub const CLICK_INTERVAL: Duration = Duration::from_millis(500);
 pub const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(60);
@@ -21,7 +21,6 @@ struct AutoScroll {
 pub struct MouseState {
     pub(crate) anchor: Option<Pos>,
     dragging: bool,
-    dragged: bool,
     clicks: u8,
     last_click: Option<(Instant, u16, u16)>,
     auto_scroll: Option<AutoScroll>,
@@ -60,7 +59,6 @@ impl Editor {
 
     pub(crate) fn end_drag(&mut self) {
         self.mouse.dragging = false;
-        self.mouse.dragged = false;
         self.mouse.anchor = None;
         self.mouse.auto_scroll = None;
     }
@@ -127,11 +125,10 @@ impl Editor {
             self.set_cursor(pos);
             return Effect::Redraw;
         };
-        let copied = slice(self.text(), run.clone()).to_string();
         let last = prev_boundary(self.text(), run.end);
         self.set_selection(Some(Selection::new(run.start, run.end)));
         self.set_cursor(last);
-        Effect::Copy(copied)
+        Effect::Redraw
     }
 
     fn triple_click(&mut self, pos: Pos) -> Effect {
@@ -140,13 +137,11 @@ impl Editor {
         if range.is_empty() {
             return Effect::Redraw;
         }
-        let copied = slice(self.text(), range.clone()).to_string();
         self.set_selection(Some(Selection::new(range.start, range.end)));
-        Effect::Copy(copied)
+        Effect::Redraw
     }
 
     fn drag_to(&mut self, ev: MouseEvent, area: Rect, now: Instant) -> Effect {
-        self.mouse.dragged = true;
         let below = ev.row >= area.bottom();
         let scroll = self.viewport().scroll;
         let from_elsewhere = match self.mouse.anchor {
@@ -213,15 +208,8 @@ impl Editor {
     }
 
     fn release(&mut self) -> Effect {
-        let dragged = self.mouse.dragged;
         self.end_drag();
-        if !dragged {
-            return Effect::Redraw;
-        }
-        match self.selection_range() {
-            Some(range) => Effect::Copy(slice(self.text(), range).to_string()),
-            None => Effect::Redraw,
-        }
+        Effect::Redraw
     }
 
     fn wheel(&mut self, down: bool) -> Effect {
@@ -358,8 +346,7 @@ mod tests {
         assert_eq!(e.selection(), Some(Selection::new(1, 0)));
         e.mouse(down(3, 0), area(), t);
         assert_eq!(e.selection(), Some(Selection::new(1, 3)));
-        let copied = e.mouse(up(3, 0), area(), t);
-        assert_eq!(copied, Effect::Copy("el".to_string()));
+        assert_eq!(e.mouse(up(3, 0), area(), t), Effect::Redraw);
         assert_eq!(e.selection_range(), Some(1..3));
         e.mouse(down(2, 0), area(), ms(t, 1000));
         e.mouse(drag(2, 0), area(), ms(t, 1000));
@@ -376,12 +363,10 @@ mod tests {
         let mut e = editor("foo bar.\nnext");
         let t = Instant::now();
         click(&mut e, 5, 0, t);
-        let second = click(&mut e, 5, 0, ms(t, 100));
-        assert_eq!(second, Effect::Copy("bar".to_string()));
+        assert_eq!(click(&mut e, 5, 0, ms(t, 100)), Effect::Redraw);
         assert_eq!(e.selection_range(), Some(4..7));
         assert_eq!(e.cursor(), 6);
-        let third = click(&mut e, 5, 0, ms(t, 200));
-        assert_eq!(third, Effect::Copy("foo bar.\n".to_string()));
+        assert_eq!(click(&mut e, 5, 0, ms(t, 200)), Effect::Redraw);
         assert_eq!(e.selection_range(), Some(0..9));
         assert_eq!(e.cursor(), 5);
         click(&mut e, 5, 0, ms(t, 300));
@@ -453,8 +438,8 @@ mod tests {
         scroll(&mut e, false);
         assert_eq!(e.viewport().scroll, 1);
         assert_eq!(e.selection_range(), Some(0..2));
-        let copied = e.mouse(up(0, 1), area(), t);
-        assert_eq!(copied, Effect::Copy("a\n".to_string()));
+        assert_eq!(e.mouse(up(0, 1), area(), t), Effect::Redraw);
+        assert_eq!(e.selection_range(), Some(0..2));
         assert_eq!(e.next_deadline(), None);
         assert_eq!(e.advance(t), Effect::Nothing);
     }

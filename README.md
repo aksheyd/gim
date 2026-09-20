@@ -91,9 +91,9 @@ Word deletes (Option-Backspace, Option-d, Ctrl-W, Ctrl-U, Ctrl-K) go to a
 single kill slot that Ctrl-Y reinserts; consecutive kills replace it rather
 than accumulate. The clipboard (Ctrl-C/X/V) is separate.
 
-Mouse: click to place the cursor, drag to select (the selection is copied on
-release), double-click a word, triple-click a line, wheel to scroll without
-moving the cursor.
+Mouse: click to place the cursor, drag to select, double-click a word,
+triple-click a line, wheel to scroll without moving the cursor. Selecting
+never copies; press Ctrl-C to copy what is selected.
 
 ## Files
 
