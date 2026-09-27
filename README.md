@@ -2,9 +2,9 @@
 
 grok vim — a small no-modes terminal editor with emacs/macOS keybinds.
 
-Write notes for your agents, or have them use gim as a cross-pane messaging board. Notes are auto-saved and files are updated/synced across open panes.
+Notes are auto-saved. Every window on the same file shares one editor.
 
-![Two panes sharing the same follow-ups file](docs/demo.gif)
+![Two panes on the same notes file](docs/demo.gif)
 
 ```
 gim                  # opens your default notes file
@@ -13,7 +13,7 @@ gim --local [FILE]   # edit in this process only, no daemon
 gim --kill [FILE]    # save and stop the daemon for a file
 ```
 
-The default notes file is `$GIM_NOTES`, else `$XDG_DATA_HOME/gim/notes.md`, else `~/.local/share/gim/notes.md`.
+The default notes file is `$GIM_NOTES`, else `$XDG_DATA_HOME/gim/notes.md`, else `~/.local/share/gim/notes.md`. Daemon sockets and logs live under `$XDG_STATE_HOME/gim/run/` (else `~/.local/state/gim/run/`).
 
 ## Features
 
