@@ -7,11 +7,11 @@ Notes are auto-saved. Every window on the same file shares one editor.
 ![Two panes on the same notes file](docs/demo.gif)
 
 ```
-gim                  # opens your default notes file
-gim notes.md         # opens a specific file
+gim [FILE]           # open the notes file (default: see gim config)
+gim config           # print resolved notes and state paths
 gim --local [FILE]   # edit in this process only, no daemon
 gim --kill [FILE]    # save and stop the daemon for a file
-gim config           # print resolved notes and state paths
+gim --help
 ```
 
 `gim config` prints where the default notes file and daemon state live (`$GIM_NOTES` / `$XDG_DATA_HOME` / `$XDG_STATE_HOME`, with the usual `~/.local` fallbacks).

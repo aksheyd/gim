@@ -1,9 +1,9 @@
-use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use clap::{Parser, Subcommand};
 use crossterm::event::{self, Event, MouseEventKind};
 use gim::app::{App, Flow};
 use gim::clipboard::default_clipboard;
@@ -11,63 +11,70 @@ use gim::file::{self, Document};
 use gim::terminal::{self, TerminalGuard};
 use gim::ui;
 
-const USAGE: &str = "usage: gim [FILE]
-       gim --local [FILE]
-       gim --kill [FILE]
-       gim config
+#[derive(Parser)]
+#[command(
+    name = "gim",
+    version,
+    about = "A small no-modes terminal editor with emacs/macOS keybinds",
+    disable_help_subcommand = true,
+    args_conflicts_with_subcommands = true,
+    after_help = "Every window on the same file shares one editor through a daemon that keeps running after the windows close.\n\n--local edits in this process only. --kill saves and stops the daemon for the file."
+)]
+struct Args {
+    #[arg(
+        value_name = "FILE",
+        help = "Notes file to open (default: see gim config)"
+    )]
+    file: Option<PathBuf>,
 
-Opens FILE, or the default notes file when omitted.
-gim config prints the resolved notes and state paths.
+    #[arg(long, conflicts_with_all = ["kill", "daemon"], help = "Edit in this process only, no daemon")]
+    local: bool,
 
-Every window on the same file shares one editor through a daemon that
-keeps running after the windows close. --local edits in this process only;
---kill saves and stops the daemon for the file.";
+    #[arg(
+        long,
+        conflicts_with = "daemon",
+        help = "Save and stop the daemon for FILE"
+    )]
+    kill: bool,
 
-enum Cli {
-    Open(PathBuf),
-    Local(PathBuf),
-    Kill(PathBuf),
-    Daemon(PathBuf),
-    Config,
-    Help,
-    Usage,
+    #[arg(long, hide = true, requires = "file")]
+    daemon: bool,
+
+    #[command(subcommand)]
+    command: Option<Cmd>,
 }
 
-fn parse_args(args: &[OsString]) -> Cli {
-    let path = |rest: &[OsString]| match rest {
-        [] => Some(file::default_notes_path()),
-        [one] if !one.to_string_lossy().starts_with('-') => Some(PathBuf::from(one)),
-        _ => None,
-    };
-    match args {
-        [one] if one == "-h" || one == "--help" => Cli::Help,
-        [one] if one == "config" => Cli::Config,
-        [flag, rest @ ..] if flag == "--local" => path(rest).map_or(Cli::Usage, Cli::Local),
-        [flag, rest @ ..] if flag == "--kill" => path(rest).map_or(Cli::Usage, Cli::Kill),
-        [flag, one] if flag == "--daemon" => Cli::Daemon(PathBuf::from(one)),
-        rest => path(rest).map_or(Cli::Usage, Cli::Open),
+#[derive(Subcommand)]
+enum Cmd {
+    #[command(about = "Print resolved notes and state paths")]
+    Config,
+}
+
+impl Args {
+    fn path(&self) -> PathBuf {
+        self.file.clone().unwrap_or_else(file::default_notes_path)
     }
 }
 
 fn main() -> ExitCode {
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let result = match parse_args(&args) {
-        Cli::Help => {
-            println!("{USAGE}");
-            return ExitCode::SUCCESS;
-        }
-        Cli::Usage => {
-            eprintln!("{USAGE}");
+    let args = Args::parse();
+    if let Some(Cmd::Config) = args.command {
+        print_config();
+        return ExitCode::SUCCESS;
+    }
+    if args.daemon {
+        let Some(path) = args.file.as_ref() else {
             return ExitCode::from(2);
-        }
-        Cli::Config => {
-            print_config();
-            return ExitCode::SUCCESS;
-        }
-        Cli::Local(path) => local(&path),
-        Cli::Open(path) => open(&path),
-        Cli::Kill(path) => kill(&path),
-        Cli::Daemon(path) => return daemon(&path),
+        };
+        return daemon(path);
+    }
+    let path = args.path();
+    let result = if args.kill {
+        kill(&path)
+    } else if args.local {
+        local(&path)
+    } else {
+        open(&path)
     };
     match result {
         Ok(code) => code,
@@ -221,5 +228,38 @@ fn run(doc: Document, text: String) -> io::Result<()> {
         if app.handle_event(ev, Instant::now()) == Flow::Quit {
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_is_a_subcommand() {
+        let args = Args::parse_from(["gim", "config"]);
+        assert!(matches!(args.command, Some(Cmd::Config)));
+        assert!(args.file.is_none());
+    }
+
+    #[test]
+    fn file_is_optional_and_kill_is_a_flag() {
+        let args = Args::parse_from(["gim", "--kill", "notes.md"]);
+        assert!(args.kill);
+        assert_eq!(args.file.as_deref(), Some(Path::new("notes.md")));
+        assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn daemon_is_hidden_and_requires_a_file() {
+        let args = Args::parse_from(["gim", "--daemon", "/n/notes.md"]);
+        assert!(args.daemon);
+        assert_eq!(args.file.as_deref(), Some(Path::new("/n/notes.md")));
+        assert!(Args::try_parse_from(["gim", "--daemon"]).is_err());
+    }
+
+    #[test]
+    fn local_and_kill_conflict() {
+        assert!(Args::try_parse_from(["gim", "--local", "--kill"]).is_err());
     }
 }
