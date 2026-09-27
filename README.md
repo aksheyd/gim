@@ -1,6 +1,6 @@
 # gim
 
-grok vim — a small terminal editor with no modes and easy emacs/readline and macOS text-field keybinds. Not vim.
+grok vim — a small no-modes terminal editor with emacs/macOS keybinds.
 
 Write notes for your agents, or have them use gim as a cross-pane messaging board. Notes are auto-saved and files are updated/synced across open panes.
 
