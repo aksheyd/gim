@@ -1,20 +1,16 @@
 # gim
 
-grok vim — a small terminal notes editor with no modes.
+grok vim — a small terminal editor with no modes and easy emacs/readline and macOS text-field keybinds. Not vim.
 
-A simple vim for follow-ups. Jot notes for your agents, or let agents
-use the same file as a cross-pane messaging board. Notes stay saved.
-Every window on the file is the same editor, with readline and macOS
-text-field keys.
+Write notes for your agents, or have them use gim as a cross-pane messaging board. Notes are auto-saved and files are updated/synced across open panes.
 
 ![Two panes sharing the same follow-ups file](docs/demo.gif)
 
 ## Features
 
 - Cross-pane. Every window on the same file shares one editor.
-- Notes stay saved. Autosave, and the daemon keeps the session after
-  the window closes.
-- Terminal-native. Familiar readline and macOS text-field keybinds.
+- Notes stay saved. Autosave, and the daemon keeps the session after the window closes.
+- Terminal-native. Familiar emacs/readline and macOS text-field keybinds.
 - No modes. Soft wrap, mouse selection, one file at a time.
 
 ```
@@ -24,8 +20,7 @@ gim --local [FILE]   # edit in this process only, no daemon
 gim --kill [FILE]    # save and stop the daemon for a file
 ```
 
-The default notes file is `$GIM_NOTES`, else `$XDG_DATA_HOME/gim/notes.md`,
-else `~/.local/share/gim/notes.md`.
+The default notes file is `$GIM_NOTES`, else `$XDG_DATA_HOME/gim/notes.md`, else `~/.local/share/gim/notes.md`.
 
 ## Install
 
@@ -37,9 +32,7 @@ Requires a stable Rust toolchain (1.89 or newer).
 
 ## Keys
 
-Keybinds follow readline and macOS text-field conventions, inspired by the
-composer in [xai-org/grok-build](https://github.com/xai-org/grok-build),
-which I helped create and maintain.
+Keybinds follow emacs/readline and macOS text-field conventions, inspired by the composer in [xai-org/grok-build](https://github.com/xai-org/grok-build), which I helped create and maintain.
 
 | Keys | Action |
 |---|---|
@@ -70,12 +63,8 @@ which I helped create and maintain.
 | Ctrl-Q | Save and close this window |
 | Ctrl-L | Scroll the cursor row to the middle |
 
-Saving is automatic: the file is written one second after you stop typing and
-again when you quit. The status line shows `[+]` while a change is not yet on
-disk.
+Saving is automatic: the file is written one second after you stop typing and again when you quit. The status line shows `[+]` while a change is not yet on disk.
 
-Mouse: click to place the cursor, drag to select, double-click a word,
-triple-click a line, wheel to scroll without moving the cursor. Selecting
-never copies; press Ctrl-C to copy what is selected.
+Mouse: click to place the cursor, drag to select, double-click a word, triple-click a line, wheel to scroll without moving the cursor. Selecting never copies; press Ctrl-C to copy what is selected.
 
 Daemon, files, terminal quirks, and limitations: [docs](docs/README.md).
