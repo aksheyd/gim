@@ -6,13 +6,6 @@ Write notes for your agents, or have them use gim as a cross-pane messaging boar
 
 ![Two panes sharing the same follow-ups file](docs/demo.gif)
 
-## Features
-
-- Cross-pane. Every window on the same file shares one editor.
-- Notes stay saved. Autosave, and the daemon keeps the session after the window closes.
-- Terminal-native. Familiar emacs/readline and macOS text-field keybinds.
-- No modes. Soft wrap, mouse selection, one file at a time.
-
 ```
 gim                  # opens your default notes file
 gim notes.md         # opens a specific file
@@ -21,6 +14,13 @@ gim --kill [FILE]    # save and stop the daemon for a file
 ```
 
 The default notes file is `$GIM_NOTES`, else `$XDG_DATA_HOME/gim/notes.md`, else `~/.local/share/gim/notes.md`.
+
+## Features
+
+- Cross-pane. Every window on the same file shares one editor.
+- Notes stay saved. Autosave, and the daemon keeps the session after the window closes.
+- Terminal-native. Familiar emacs/readline and macOS text-field keybinds.
+- No modes. Soft wrap, mouse selection, one file at a time.
 
 ## Install
 
