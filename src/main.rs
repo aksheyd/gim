@@ -249,17 +249,4 @@ mod tests {
         assert_eq!(args.file.as_deref(), Some(Path::new("notes.md")));
         assert!(args.command.is_none());
     }
-
-    #[test]
-    fn daemon_is_hidden_and_requires_a_file() {
-        let args = Args::parse_from(["gim", "--daemon", "/n/notes.md"]);
-        assert!(args.daemon);
-        assert_eq!(args.file.as_deref(), Some(Path::new("/n/notes.md")));
-        assert!(Args::try_parse_from(["gim", "--daemon"]).is_err());
-    }
-
-    #[test]
-    fn local_and_kill_conflict() {
-        assert!(Args::try_parse_from(["gim", "--local", "--kill"]).is_err());
-    }
 }

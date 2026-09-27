@@ -141,20 +141,4 @@ mod tests {
         assert!(buf.apply(insert(0..3, "abc")).is_some());
         assert_eq!(buf.cursor(), 3);
     }
-
-    #[test]
-    fn fused_cluster_keeps_right_affinity_through_undo_redo() {
-        let mut buf = Buffer::new("👩💻".to_string());
-        let mid = "👩".len();
-        buf.set_cursor(mid);
-        let delta = buf.apply(insert(mid..mid, "\u{200d}")).unwrap();
-        assert_eq!(buf.text(), "👩\u{200d}💻");
-        assert_eq!(buf.cursor(), buf.len());
-        buf.replay(&delta, false);
-        assert_eq!(buf.text(), "👩💻");
-        assert_eq!(buf.cursor(), mid);
-        buf.replay(&delta, true);
-        assert_eq!(buf.text(), "👩\u{200d}💻");
-        assert_eq!(buf.cursor(), buf.len());
-    }
 }

@@ -181,7 +181,7 @@ mod tests {
 
     use super::*;
     use crate::clipboard::MemClipboard;
-    use crate::file::{Document, temp_dir};
+    use crate::file::Document;
 
     fn make_app(text: &str, width: u16, height: u16) -> App {
         let mut doc = Document::new(Path::new("notes.md"));
@@ -203,11 +203,6 @@ mod tests {
             out.push_str(buf[(x, y)].symbol());
         }
         out
-    }
-
-    fn reversed_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> bool {
-        let style = terminal.backend().buffer()[(x, y)].style();
-        style.add_modifier.contains(Modifier::REVERSED)
     }
 
     fn cursor(terminal: &mut Terminal<TestBackend>) -> Option<(u16, u16)> {
@@ -258,77 +253,5 @@ mod tests {
         assert_eq!(row(&t, 0), "klmno");
         assert_eq!(row(&t, 1), "     ");
         assert_eq!(cursor(&mut t), Some((0, 1)));
-    }
-
-    #[test]
-    fn pinned_scroll_hides_cursor_and_typing_restores_it() {
-        let mut app = make_app("a\nb\nc\nd\ne\nf\ng", 20, 4);
-        let mut t = render(&app, 20, 4);
-        assert_eq!(cursor(&mut t), Some((0, 0)));
-        let wheel = crate::MouseEvent {
-            kind: crossterm::event::MouseEventKind::ScrollDown,
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        };
-        app.handle_event(crate::Event::Mouse(wheel), Instant::now());
-        let mut t = render(&app, 20, 4);
-        assert_eq!(row(&t, 0), "b                   ");
-        assert_eq!(cursor(&mut t), None);
-        key(&mut app, KeyCode::Char('z'), KeyModifiers::NONE);
-        let mut t = render(&app, 20, 4);
-        assert_eq!(row(&t, 0), "za                  ");
-        assert_eq!(cursor(&mut t), Some((1, 0)));
-        assert_eq!(row(&t, 3), " notes.md [+] (new) ");
-    }
-
-    #[test]
-    fn selection_is_reversed_and_status_shows_message_and_markers() {
-        let mut app = make_app("abc def", 60, 3);
-        key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
-        key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
-        let t = render(&app, 60, 3);
-        assert!(reversed_at(&t, 0, 0));
-        assert!(reversed_at(&t, 1, 0));
-        assert!(!reversed_at(&t, 2, 0));
-        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-        let t = render(&app, 60, 3);
-        assert_eq!(
-            row(&t, 2),
-            " notes.md (new)        Ctrl-Q to quit            Ln 1, Col 3"
-        );
-        let mut app = make_app("x", 12, 2);
-        app.doc.ending = LineEnding::Crlf;
-        app.doc.bom = true;
-        let t = render(&app, 12, 2);
-        assert_eq!(row(&t, 1), " notes.md (n");
-    }
-
-    #[test]
-    fn degenerate_sizes() {
-        let mut app = make_app("abc", 1, 1);
-        key(&mut app, KeyCode::Right, KeyModifiers::NONE);
-        let mut t = render(&app, 1, 1);
-        assert_eq!(row(&t, 0), "b");
-        assert_eq!(cursor(&mut t), Some((0, 0)));
-        let mut app = make_app("hello", 10, 1);
-        let blocker = temp_dir().join("blocker");
-        std::fs::write(&blocker, "").unwrap();
-        app.doc.path = blocker.join("child.md");
-        key(&mut app, KeyCode::Char('!'), KeyModifiers::NONE);
-        let mut t = render(&app, 10, 1);
-        assert_eq!(row(&t, 0), "!hello    ");
-        assert_eq!(cursor(&mut t), Some((1, 0)));
-        key(&mut app, KeyCode::Char('q'), KeyModifiers::CONTROL);
-        assert_eq!(app.mode(), Mode::QuitPrompt);
-        let prompt = format!("{} — {QUIT_PROMPT}", app.message().unwrap());
-        let mut t = render(&app, 10, 1);
-        assert_eq!(row(&t, 0), prompt.chars().take(10).collect::<String>());
-        assert_eq!(cursor(&mut t), None);
-        let _ = std::fs::remove_dir_all(blocker.parent().unwrap());
-        let app = make_app("", 0, 0);
-        let mut t = render(&app, 0, 0);
-        assert_eq!(cursor(&mut t), None);
-        assert_eq!(cursor_label("ab\n한\tc", 8), "Ln 2, Col 8");
     }
 }

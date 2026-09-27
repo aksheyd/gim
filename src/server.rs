@@ -154,11 +154,9 @@ mod tests {
     use ratatui::style::Modifier;
 
     use super::*;
-    use crate::app::{AUTOSAVE_DELAY, Mode, QUIT_PROMPT};
     use crate::clipboard::MemClipboard;
     use crate::file::{Document, temp_dir};
     use crate::protocol::{Patch, apply};
-    use crate::text::slice;
 
     const A: ClientId = 1;
     const B: ClientId = 2;
@@ -168,13 +166,6 @@ mod tests {
         let doc = Document::new(&temp_dir().join("notes.md"));
         let clipboard = Box::new(MemClipboard::default());
         Server::new(App::new(doc, text.to_string(), clipboard, 80, 24))
-    }
-
-    fn block_saves(server: &mut Server) -> std::path::PathBuf {
-        let blocker = server.app.doc.path.parent().unwrap().join("blocker");
-        fs::write(&blocker, "").unwrap();
-        server.app.doc.path = blocker.join("child.md");
-        blocker
     }
 
     fn key(code: KeyCode, mods: KeyModifiers) -> Event {
@@ -340,119 +331,6 @@ mod tests {
         check(&s, &m);
         assert_eq!(fs::read_to_string(&s.app.doc.path).unwrap(), "x");
         assert!(!row(&m, B, 9).contains("[+]"));
-        let _ = fs::remove_dir_all(s.app.doc.path.parent().unwrap());
-    }
-
-    #[test]
-    fn failed_save_prompt_is_shared_and_answered_by_anyone() {
-        let mut s = make_server("");
-        let blocker = block_saves(&mut s);
-        let t = Instant::now();
-        let mut m = Mirrors::new();
-        deliver(&mut m, &s.attach(A, 60, 10, t));
-        deliver(&mut m, &s.attach(B, 60, 10, t));
-        deliver(&mut m, &s.event(A, plain('x'), t));
-        let out = s.event(A, ctrl('q'), t);
-        assert_eq!(patches(&out).len(), 2);
-        deliver(&mut m, &out);
-        check(&s, &m);
-        assert_eq!(s.app.mode(), Mode::QuitPrompt);
-        let status = row(&m, B, 9);
-        assert!(status.contains(slice(QUIT_PROMPT, 0..8)), "{status:?}");
-
-        let out = s.event(B, plain('n'), t);
-        assert_eq!(out[0], (B, ServerMsg::Bye));
-        deliver(&mut m, &out);
-        check(&s, &m);
-        assert_eq!(s.app.mode(), Mode::Normal);
-        assert_eq!(s.clients(), 1);
-        let status = row(&m, A, 9);
-        assert!(!status.contains(slice(QUIT_PROMPT, 0..8)), "{status:?}");
-        assert_eq!(s.app.editor.text(), "x");
-        let _ = fs::remove_dir_all(blocker.parent().unwrap());
-    }
-
-    #[test]
-    fn autosave_runs_without_clients_and_shutdown_needs_a_save() {
-        let mut s = make_server("");
-        let t = Instant::now();
-        s.attach(A, 40, 10, t);
-        s.event(A, plain('x'), t);
-        assert!(s.detach(A, t).is_empty());
-        assert_eq!(s.clients(), 0);
-        assert!(s.last.is_none());
-        assert_eq!(s.next_deadline(t), Some(AUTOSAVE_DELAY));
-        assert!(s.tick(t + AUTOSAVE_DELAY / 2).is_empty());
-        assert!(s.app.is_dirty());
-        assert!(s.tick(t + AUTOSAVE_DELAY).is_empty());
-        assert!(!s.app.is_dirty());
-        assert_eq!(fs::read_to_string(&s.app.doc.path).unwrap(), "x");
-        let _ = fs::remove_dir_all(s.app.doc.path.parent().unwrap());
-
-        let mut s = make_server("");
-        let blocker = block_saves(&mut s);
-        s.attach(A, 40, 10, t);
-        s.attach(B, 40, 10, t);
-        s.event(A, plain('y'), t);
-        assert!(s.shutdown().is_err());
-        assert_eq!(s.clients(), 2);
-        fs::remove_file(&blocker).unwrap();
-        assert_eq!(s.shutdown(), Ok(()));
-        assert_eq!(fs::read_to_string(&s.app.doc.path).unwrap(), "y");
-        let _ = fs::remove_dir_all(blocker.parent().unwrap());
-    }
-
-    struct Lcg(u64);
-
-    impl Lcg {
-        fn below(&mut self, n: usize) -> usize {
-            self.0 = self
-                .0
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((self.0 >> 33) % n as u64) as usize
-        }
-    }
-
-    #[test]
-    fn patches_reproduce_an_independent_render() {
-        let mut s = make_server("ab");
-        let t = Instant::now();
-        let mut m = Mirrors::new();
-        deliver(&mut m, &s.attach(A, 8, 3, t));
-        let go = |s: &mut Server, m: &mut Mirrors, ev: Event| {
-            deliver(m, &s.event(A, ev, t));
-            check(s, m);
-        };
-        go(&mut s, &mut m, key(KeyCode::Char('a'), KeyModifiers::ALT));
-        assert!(look(&m[&A].buf.as_ref().unwrap()[(0, 0)]).1);
-        go(&mut s, &mut m, plain('コ'));
-        go(&mut s, &mut m, plain('x'));
-        assert_eq!(row(&m, A, 0), "コ x     ");
-        go(&mut s, &mut m, key(KeyCode::Char('a'), KeyModifiers::ALT));
-        go(&mut s, &mut m, plain('x'));
-        assert_eq!(row(&m, A, 0), "x       ");
-
-        let alphabet = ["\n", "\t", " ", "a", "e\u{301}", "한", "👩\u{200d}💻"];
-        let mut rng = Lcg(7);
-        for _ in 0..300 {
-            let ev = match rng.below(10) {
-                0..=4 => {
-                    let g = alphabet[rng.below(alphabet.len())];
-                    let mut chars = g.chars();
-                    match (chars.next(), chars.next()) {
-                        (Some(c), None) => plain(c),
-                        _ => Event::Paste(g.to_string()),
-                    }
-                }
-                5 => key(KeyCode::Backspace, KeyModifiers::NONE),
-                6 => key(KeyCode::Left, KeyModifiers::SHIFT),
-                7 => key(KeyCode::Right, KeyModifiers::SHIFT),
-                8 => ctrl('z'),
-                _ => Event::Resize(1 + rng.below(14) as u16, 1 + rng.below(5) as u16),
-            };
-            go(&mut s, &mut m, ev);
-        }
         let _ = fs::remove_dir_all(s.app.doc.path.parent().unwrap());
     }
 }

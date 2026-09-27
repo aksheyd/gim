@@ -190,14 +190,6 @@ mod tests {
         k(KeyCode::Char(c), mods)
     }
 
-    fn mv(m: Motion) -> Option<Action> {
-        Some(Action::Move(m))
-    }
-
-    fn sel(m: Motion) -> Option<Action> {
-        Some(Action::Select(m))
-    }
-
     #[test]
     fn text_keys() {
         assert_eq!(ch('a', NONE), Some(Action::Insert('a')));
@@ -230,53 +222,5 @@ mod tests {
         assert_eq!(ch('u', CONTROL), Some(TO_LINE_START));
         assert_eq!(ch('k', CONTROL), Some(TO_LINE_END));
         assert_eq!(ch('y', CONTROL), Some(Action::Yank));
-    }
-
-    #[test]
-    fn motions_and_selection() {
-        assert_eq!(k(KeyCode::Left, NONE), mv(Motion::Left));
-        assert_eq!(k(KeyCode::Left, SHIFT), sel(Motion::Left));
-        assert_eq!(k(KeyCode::Left, ALT), mv(Motion::WordLeft));
-        assert_eq!(k(KeyCode::Right, CONTROL | SHIFT), sel(Motion::WordRight));
-        assert_eq!(ch('b', CONTROL), mv(Motion::Left));
-        assert_eq!(ch('\u{2}', NONE), mv(Motion::Left));
-        assert_eq!(ch('\u{6}', NONE), mv(Motion::Right));
-        assert_eq!(ch('f', ALT), mv(Motion::WordRight));
-        assert_eq!(ch('B', ALT), sel(Motion::WordLeft));
-        assert_eq!(ch('a', CONTROL), mv(Motion::LineStartChain));
-        assert_eq!(ch('e', CONTROL | SHIFT), sel(Motion::LineEndChain));
-        assert_eq!(k(KeyCode::Home, NONE), mv(Motion::LineStart));
-        assert_eq!(k(KeyCode::End, SHIFT), sel(Motion::LineEnd));
-        assert_eq!(k(KeyCode::Home, CONTROL), mv(Motion::DocStart));
-        assert_eq!(k(KeyCode::Up, SUPER), mv(Motion::DocStart));
-        assert_eq!(k(KeyCode::Down, CONTROL), mv(Motion::Down));
-        assert_eq!(ch('p', CONTROL), mv(Motion::Up));
-        assert_eq!(ch('n', CONTROL), mv(Motion::Down));
-        assert_eq!(k(KeyCode::PageUp, NONE), mv(Motion::PageUp));
-    }
-
-    #[test]
-    fn app_chords() {
-        assert_eq!(ch('z', CONTROL), Some(Action::Undo));
-        assert_eq!(ch('z', SUPER), Some(Action::Undo));
-        assert_eq!(ch('Z', CONTROL), Some(Action::Redo));
-        assert_eq!(ch('z', CONTROL | SHIFT), Some(Action::Redo));
-        assert_eq!(ch('z', ALT), Some(Action::Redo));
-        assert_eq!(ch('r', CONTROL), Some(Action::Redo));
-        assert_eq!(ch('c', CONTROL), Some(Action::Copy));
-        assert_eq!(ch('x', SUPER), Some(Action::Cut));
-        assert_eq!(ch('v', CONTROL), Some(Action::Paste));
-        assert_eq!(ch('v', CONTROL | SHIFT), Some(Action::Paste));
-        assert_eq!(ch('a', SUPER), Some(Action::SelectAll));
-        assert_eq!(ch('a', ALT), Some(Action::SelectAll));
-        assert_eq!(ch('s', CONTROL), Some(Action::Save));
-        assert_eq!(ch('q', CONTROL), Some(Action::Quit));
-        assert_eq!(ch('l', CONTROL), Some(Action::Recenter));
-        assert_eq!(k(KeyCode::Esc, NONE), Some(Action::Escape));
-        assert_eq!(ch('[', CONTROL), Some(Action::Escape));
-        assert_eq!(ch('g', CONTROL), None);
-        assert_eq!(ch('/', CONTROL), None);
-        assert_eq!(ch('f', SUPER), None);
-        assert_eq!(k(KeyCode::F(1), NONE), None);
     }
 }

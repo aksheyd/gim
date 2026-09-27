@@ -1,0 +1,22 @@
+name: Style checks
+description: Line limit, no comments, and a unit-test cap for Rust sources
+inputs:
+  max-lines:
+    description: Maximum lines per .rs file
+    default: "500"
+  max-unit-tests:
+    description: Maximum #[test] functions per file under src/
+    default: "2"
+  src-root:
+    description: Directory that holds unit-tested Rust sources
+    default: src
+runs:
+  using: composite
+  steps:
+    - name: Style checks
+      shell: bash
+      env:
+        MAX_LINES: ${{ inputs.max-lines }}
+        MAX_UNIT_TESTS: ${{ inputs.max-unit-tests }}
+        SRC_ROOT: ${{ inputs.src-root }}
+      run: bash "${{ github.action_path }}/check.sh"

@@ -17,4 +17,6 @@ pub mod ui;
 pub mod undo;
 pub mod wrap;
 
-pub use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+pub use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
