@@ -11,9 +11,10 @@ gim                  # opens your default notes file
 gim notes.md         # opens a specific file
 gim --local [FILE]   # edit in this process only, no daemon
 gim --kill [FILE]    # save and stop the daemon for a file
+gim config           # print resolved notes and state paths
 ```
 
-The default notes file is `$GIM_NOTES`, else `$XDG_DATA_HOME/gim/notes.md`, else `~/.local/share/gim/notes.md`. Daemon sockets and logs live under `$XDG_STATE_HOME/gim/run/` (else `~/.local/state/gim/run/`).
+`gim config` prints where the default notes file and daemon state live (`$GIM_NOTES` / `$XDG_DATA_HOME` / `$XDG_STATE_HOME`, with the usual `~/.local` fallbacks).
 
 ## Features
 

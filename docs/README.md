@@ -19,7 +19,8 @@ pressed it in.
 - The daemon lives in `~/.local/state/gim/run/` (or `$XDG_STATE_HOME/gim/run/`)
   as `<hash>.sock`, with `<hash>.log` (truncated at each start) and a
   `<hash>.lock` used only while a daemon is being started (never removed,
-  harmless). Removing the socket file force-stops the daemon within a second
+  harmless). `gim config` prints the resolved notes and state paths.
+  Removing the socket file force-stops the daemon within a second
   (it still tries to save first).
 - `gim --local` is the old single-process editor and is refused while a
   daemon holds the file. It is also the fallback when `HOME` is unset or the

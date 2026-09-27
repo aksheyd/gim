@@ -70,18 +70,29 @@ pub fn paths(canonical: &Path) -> io::Result<Paths> {
     )
 }
 
-pub fn paths_from(
-    canonical: &Path,
+pub fn state_dir() -> io::Result<PathBuf> {
+    state_dir_from(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
+}
+
+pub fn state_dir_from(
     xdg_state_home: Option<OsString>,
     home: Option<OsString>,
-) -> io::Result<Paths> {
+) -> io::Result<PathBuf> {
     let non_empty = |v: Option<OsString>| v.filter(|s| !s.is_empty());
     let base = match (non_empty(xdg_state_home), non_empty(home)) {
         (Some(xdg), _) => PathBuf::from(xdg),
         (None, Some(home)) => PathBuf::from(home).join(".local").join("state"),
         (None, None) => return Err(io::Error::other("HOME is not set; use gim --local")),
     };
-    let dir = base.join("gim").join("run");
+    Ok(base.join("gim").join("run"))
+}
+
+pub fn paths_from(
+    canonical: &Path,
+    xdg_state_home: Option<OsString>,
+    home: Option<OsString>,
+) -> io::Result<Paths> {
+    let dir = state_dir_from(xdg_state_home, home)?;
     let name = format!("{:016x}", fnv1a64(canonical.as_os_str().as_bytes()));
     let sock = dir.join(format!("{name}.sock"));
     if sock.as_os_str().len() > MAX_SOCK_PATH {
@@ -681,6 +692,7 @@ mod tests {
         let some = |p: &Path| Some(p.as_os_str().to_os_string());
         let paths = paths_from(Path::new("/n/notes.md"), some(&dir), None).unwrap();
         let run = dir.join("gim").join("run");
+        assert_eq!(state_dir_from(some(&dir), None).unwrap(), run);
         assert_eq!(paths.sock, run.join("5331277a5d5cc8fd.sock"));
         assert_eq!(paths.lock, run.join("5331277a5d5cc8fd.lock"));
         assert_eq!(paths.log, run.join("5331277a5d5cc8fd.log"));

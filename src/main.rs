@@ -14,9 +14,10 @@ use gim::ui;
 const USAGE: &str = "usage: gim [FILE]
        gim --local [FILE]
        gim --kill [FILE]
+       gim config
 
-Opens FILE, or the default notes file when omitted:
-$GIM_NOTES, else $XDG_DATA_HOME/gim/notes.md, else ~/.local/share/gim/notes.md.
+Opens FILE, or the default notes file when omitted.
+gim config prints the resolved notes and state paths.
 
 Every window on the same file shares one editor through a daemon that
 keeps running after the windows close. --local edits in this process only;
@@ -27,6 +28,7 @@ enum Cli {
     Local(PathBuf),
     Kill(PathBuf),
     Daemon(PathBuf),
+    Config,
     Help,
     Usage,
 }
@@ -39,6 +41,7 @@ fn parse_args(args: &[OsString]) -> Cli {
     };
     match args {
         [one] if one == "-h" || one == "--help" => Cli::Help,
+        [one] if one == "config" => Cli::Config,
         [flag, rest @ ..] if flag == "--local" => path(rest).map_or(Cli::Usage, Cli::Local),
         [flag, rest @ ..] if flag == "--kill" => path(rest).map_or(Cli::Usage, Cli::Kill),
         [flag, one] if flag == "--daemon" => Cli::Daemon(PathBuf::from(one)),
@@ -57,6 +60,10 @@ fn main() -> ExitCode {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
+        Cli::Config => {
+            print_config();
+            return ExitCode::SUCCESS;
+        }
         Cli::Local(path) => local(&path),
         Cli::Open(path) => open(&path),
         Cli::Kill(path) => kill(&path),
@@ -69,6 +76,24 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn print_config() {
+    println!("notes  {}", file::default_notes_path().display());
+    match state_dir() {
+        Ok(dir) => println!("state  {}", dir.display()),
+        Err(e) => println!("state  ({e})"),
+    }
+}
+
+#[cfg(unix)]
+fn state_dir() -> io::Result<PathBuf> {
+    gim::daemon::state_dir()
+}
+
+#[cfg(not(unix))]
+fn state_dir() -> io::Result<PathBuf> {
+    Err(io::Error::other(NO_DAEMONS))
 }
 
 fn load(path: &Path) -> io::Result<(Document, String)> {
