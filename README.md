@@ -4,6 +4,8 @@ A small terminal notes editor with no modes. It follows readline and macOS
 text-field conventions: Ctrl-A/E, Option-arrows, Shift-arrows to select,
 Ctrl-Z to undo. Soft wrap, mouse selection, one file at a time.
 
+![Typing a note in gim](docs/demo.gif)
+
 ```
 gim                  # opens your default notes file
 gim notes.md         # opens a specific file
