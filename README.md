@@ -32,7 +32,7 @@ Requires a stable Rust toolchain (1.89 or newer).
 
 ## Keys
 
-Keybinds follow emacs/readline and macOS text-field conventions, inspired by the composer in [xai-org/grok-build](https://github.com/xai-org/grok-build), which I helped create and maintain.
+Keybinds follow emacs/readline and macOS text-field conventions, inspired by the prompt in [xai-org/grok-build](https://github.com/xai-org/grok-build), which I helped create and maintain.
 
 | Keys | Action |
 |---|---|
