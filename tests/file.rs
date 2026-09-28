@@ -1,6 +1,6 @@
 mod common;
 use common::temp_dir;
-use gim::file::{Document, LineEnding, LoadError, load, notes_path_from, save};
+use gim::file::{Document, LineEnding, LoadError, create_file, load, notes_path_from, save};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -126,4 +126,15 @@ fn default_path_resolution() {
         notes_path_from(None, None, None),
         PathBuf::from("./.local/share/gim/notes.md")
     );
+}
+
+#[test]
+fn create_file_creates_parents_and_empty_file() {
+    let dir = temp_dir();
+    let path = dir.join("nested").join("folder").join("created.md");
+    assert!(!path.exists());
+    create_file(&path).unwrap();
+    assert!(path.is_file());
+    assert_eq!(fs::read(&path).unwrap(), b"");
+    let _ = fs::remove_dir_all(&dir);
 }

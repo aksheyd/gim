@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -109,13 +109,27 @@ fn load(path: &Path) -> io::Result<(Document, String)> {
 
 #[cfg(unix)]
 fn target_of(path: &Path) -> io::Result<PathBuf> {
-    file::canonical_target(path).map_err(|e| {
-        let hint = match e.kind() {
-            io::ErrorKind::NotFound => " (parent directory must exist)",
-            _ => "",
-        };
-        io::Error::new(e.kind(), format!("{}: {e}{hint}", path.display()))
-    })
+    match file::canonical_target(path) {
+        Ok(target) => Ok(target),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            eprint!("gim: create file {}? (y/N) ", path.display());
+            io::stderr().flush()?;
+            let mut line = String::new();
+            io::stdin().read_line(&mut line)?;
+            let answer = line.trim();
+            if answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
+                file::create_file(path)?;
+                file::canonical_target(path)
+                    .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{}: {e} (parent directory must exist)", path.display()),
+                ))
+            }
+        }
+        Err(e) => Err(io::Error::new(e.kind(), format!("{}: {e}", path.display()))),
+    }
 }
 
 fn local(path: &Path) -> io::Result<ExitCode> {
