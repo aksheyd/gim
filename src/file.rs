@@ -141,6 +141,14 @@ pub fn canonical_target(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
+pub fn create_file(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    File::create(path)?;
+    Ok(())
+}
+
 pub fn save(doc: &mut Document, text: &str) -> io::Result<SaveOutcome> {
     let Some(name) = doc.path.file_name() else {
         return Err(io::Error::other("path has no file name"));
